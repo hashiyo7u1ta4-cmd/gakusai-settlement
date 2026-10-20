@@ -1,15 +1,23 @@
-# 学祭精算 v4.0.1 ローカル修正パッチ
+# v4.2 更新内容（v4.1 → v4.2）
 
-修正対象: PCサイドバー独立スクロール、匿名ユーザーのGoogleアカウント連携時の認証状態の判定、OAuthエラー案内、キャッシュ更新。
+**変更対象：Webアプリだけ。データベースSQLの再適用は不要。**
 
-## 適用
-- 現在のv4.0のフォルダをバックアップ。
-- ZIPの `app.mjs`、`auth-helpers.mjs`、`cloud.css`、`sw.js` を **v4.0フォルダのルート**にコピーする。`config.js`は上書きしない。
-- `http://localhost:8000/` から起動し、Ctrl+Shift+Rで再読み込み。
-- Supabase > Authentication > Sign In / Providers > User Signups > Allow manual linking をONで保存。
-- Google連携は元の匿名セッションのまま実行する。ログアウトせず、Google認証完了後にプロフィールを確認。
-- Supabase > Authentication > URL Configuration > Redirect URLs にアプリの正しいURLを登録。
-- Google OAuthのCallback URLはSupabase > Google設定からコピーし、Google Cloudの承認済みリダイレクトURIに登録。
+- POS「お預かり金額」に金種ボタン（50 / 100 / 500 / 1,000 / 5,000 / 10,000円、クリア）を追加。
+- タップごとの金額加算と不足額・釣銭の即時表示。
+- 金額欄からの直接入力も維持。
+- カート編集時に預かり金額がリセットされないよう修正。
+- キャッシュレス選択時は預かり入力・金種ボタンを非表示。
+- 会計成功後に預かり金額をクリア（エラー・取消時は保持）。
+- JSモジュール `cash-tender.mjs`、CSS `v4.2.css` を追加。Service Workerキャッシュを更新。
 
-注意: このパッチだけではGoogle OAuthプロバイダー設定の不一致やGoogleアカウントと別ユーザーの既存紐付けは解決しません。Supabaseの実OAuth接続テストは未実施です。
-本番デプロイやSQL実行は不要です。
+## ローカル更新
+
+1. ZIPの中身を別フォルダへ解凍する。
+2. 従来の `config.js` にある**公開用**Supabase Project URL と Publishable Keyを新しい `config.js` に移す。Secret/DBパスワードは記入しない。
+3. 新しいフォルダで `python -m http.server 8000 --bind 127.0.0.1` を実行する。
+4. `http://localhost:8000/` を開く。古い表示が残る場合は `Ctrl + Shift + R`、必要に応じてService Workerの更新を確認する。匿名ログイン中の人はサイトデータ削除をしないこと。
+5. レジ・POSを開き、500円の商品に100円×5回、クリア、1,000円ボタンなどを試し、釣銭・不足表示を確認する。
+
+## 検証範囲
+
+`node --test tests/*.test.mjs` で37件PASS。実機スマホ表示と実際のSupabaseでの会計確定は未検証。ローカル環境で動作確認してから本番に公開する。

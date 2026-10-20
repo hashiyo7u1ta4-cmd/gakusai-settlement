@@ -1,10 +1,19 @@
-# 学祭精算 v4.1
+# 学祭精算 v4.2 — 完全版・ローカル検証版
 
-既存 v4.0 に対する追加要望を統合した **完全版ZIP** です。`index.html`、CSS、JavaScript、アイコン、既存SQL、追加SQL、テストを同梱しています。差分ファイルのみの配布ではありません。
+既存 v4.1 にPOS預かり金額のUX改善を統合した **完全版ZIP** です。`index.html`、CSS、JavaScript、アイコン、既存SQL、追加SQL、テストを同梱しています。差分ファイルのみの配布ではありません。
 
 > **重要：** GitHub Pages・本番Supabaseは自動的には変更されません。いま運用中のデータを消さずに更新します。新しいSQLを実行する場合は、**対象が開発用Supabaseであることを確認し、データをバックアップ**してください。
 
-## 今回の修正内容
+## v4.2で追加したPOSの操作改善
+
+- 現金決済時に **50円・100円・500円・1,000円・5,000円・10,000円** の加算ボタンと「クリア」ボタンを表示します。タップするたびに預かり金額を足します。
+- 預かり額は **0円からスタート**。金額欄に直接数値を入力して修正することもできます。
+- 代金より少ない場合は「不足：○円」、十分な場合は「お釣り：○円」を自動表示します。
+- 会計中の商品の追加・減算や画面再描画をしても預かり金額を保持します。
+- 会計が成功したら、カートと預かり金額を0に戻し、次の取引の準備をします。支払方法がキャッシュレスなら金種ボタンを隠します。
+- **SupabaseのSQL更新は不要**です。v4.1のDB構造をそのまま使用します。これまでの参加者・商品・精算データは保持します。
+
+## v4.1で統合した修正内容
 
 | 機能 | 内容 |
 | --- | --- |
@@ -18,20 +27,19 @@
 
 v4の既存機能（POS、売上・現金照合、仕入れ、材料在庫、貢献ポイント、立替精算、管理者承認、Googleログイン、参加者ID、最終分配）は維持します。
 
-## 既にv4.0が動いている環境での更新（推奨）
+## 既存環境の更新
 
-1. **Supabaseの開発用プロジェクト**でバックアップを取得します。現時点の精算・商品・参加者を削除しないための更新ですが、DB変更前のバックアップを推奨します。
-2. Supabase → SQL Editor → **`supabase/upgrade_v4_to_v4_1.sql`** の全文を実行してください。1回のトランザクションで、原材料在庫の下限制約、既存POS関数、初回レジ登録・営業開始RPCを更新します。
-3. `Success. No rows returned` を確認します。既に同じSQLが適用されている場合は、原則再実行不要です。
-4. 以前のローカル v4.0 フォルダの **`config.js`** に保存した「開発用Supabase Project URL」「Publishable Key」を、新しいフォルダの `config.js` に引き継ぎます。**Secret Key、`service_role`、DBパスワード、Google OAuth Client Secretは絶対に記載しないでください。**
-5. 新しいv4.1フォルダでローカルサーバーを起動します。
+1. **すでにv4.1が動作している場合、SupabaseのSQLは実行しないでください。** v4.2はフロントエンドのみの更新です。DBはそのまま使えます。
+2. まだv4.0のDBのままでv4.1用追加SQLを一度も実行していない場合に限り、バックアップ後に `supabase/upgrade_v4_to_v4_1.sql` を開発用DBへ1回だけ実行してください。
+3. 以前のローカル v4.1 フォルダの **`config.js`** に保存した「開発用Supabase Project URL」「Publishable Key」を、新しいフォルダの `config.js` に引き継ぎます。**Secret Key、`service_role`、DBパスワード、Google OAuth Client Secretは絶対に記載しないでください。**
+4. 新しいv4.2フォルダでローカルサーバーを起動します。
 
    ```powershell
    cd "C:\path\to\gakusai-v4-complete"
    python -m http.server 8000 --bind 127.0.0.1
    ```
 
-6. `http://localhost:8000/` を開いて、`Ctrl + Shift + R` で再読込します。以前のService Workerのキャッシュが残る場合はブラウザのDevTools → Application → Service Workersで更新を確認してください。**Google未連携の匿名アカウントでは、サイトデータやログインセッションを削除しないでください。**
+5. `http://localhost:8000/` を開いて、`Ctrl + Shift + R` で再読込します。以前のService Workerのキャッシュが残る場合はブラウザのDevTools → Application → Service Workersで更新を確認してください。**Google未連携の匿名アカウントでは、サイトデータやログインセッションを削除しないでください。**
 
 ### 新規DBをゼロから構築する場合だけ
 
@@ -75,14 +83,14 @@ v2/v3の構築手順はそれぞれのファイルを参照。すでにv4が入�
 node --test tests/*.test.mjs
 ```
 
-テストは33件PASS（JSロジック、表示文字列、SQL契約、モックデータでのレジ／在庫／画面遷移）。**Supabase上での実SQL適用、Google OAuth実ログイン、PC・スマホ実機のブラウザ操作は別途検証が必要**です。
+テストは37件PASS（JSロジック、表示文字列、SQL契約、モックデータでのレジ／在庫／画面遷移）。**Supabase上での実SQL適用、Google OAuth実ログイン、PC・スマホ実機のブラウザ操作は別途検証が必要**です。
 
 ## ファイル
 
 - `index.html`：Webアプリのエントリポイント
 - `app.mjs`、`auth-helpers.mjs`：画面、参加者・Google認証
-- `v4.mjs`、`v4-finance.mjs`：POS／材料在庫／レジ締め／売上照合
-- `styles.css`、`cloud.css`、`v4.css`、`v4.1.css`：画面スタイル
+- `v4.mjs`、`v4-finance.mjs`、`cash-tender.mjs`：POS／金種加算・釣銭／材料在庫／レジ締め／売上照合
+- `styles.css`、`cloud.css`、`v4.css`、`v4.1.css`、`v4.2.css`：画面スタイル
 - `config.js`：Supabase Project URL・Publishable Key（配布時は仮の値）
 - `supabase/upgrade_v4_to_v4_1.sql`：既存v4 DBへの追加修正（今回実行するSQL）
 - `supabase/upgrade_v3_to_v4.sql`：v3 DBから新規v4.1構築する場合の統合SQL

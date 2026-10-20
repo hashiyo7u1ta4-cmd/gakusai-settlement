@@ -1,4 +1,5 @@
 import { v4Summary,aggregateCart,canFinalize } from './v4-finance.mjs';
+import { DENOMINATIONS,addDenomination,tenderBalance } from './cash-tender.mjs';
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>`${Number(n||0).toLocaleString('ja-JP')}円`;
@@ -20,6 +21,7 @@ const sortDate=(a,b)=>String(b.created_at||b.opened_at||'').localeCompare(String
 export function createV4(ctx){
  let d={pos_registers:[],pos_products:[],inventory_items:[],product_recipes:[],stock_audit:[],pos_purchase_entries:[],register_sessions:[],pos_sales:[],pos_sale_lines:[],pos_refunds:[],pos_cash_moves:[],pos_cash_checks:[],settlement_finalizations:[]};
  let report={},cart={},selectedSession='',viewOnly=false,busy=false,status={},activeEvent=null;
+ let cashTender='0',paymentMethod='cash';
  const admin=()=>ctx.admin();const event=()=>ctx.event();const locked=()=>!!d.settlement_finalizations[0];
  const summary=()=>v4Summary(ctx.current(),report,d.register_sessions,d.settlement_finalizations[0]||null);
  const activeSessions=()=>d.register_sessions.filter(x=>!x.closed_at);
@@ -31,7 +33,7 @@ export function createV4(ctx){
  function currentStatus(){return status[chosen()?.id]||null;}
  async function load(){
   const eid=event(),cl=ctx.client();if(!eid||!cl)return;
-  if(activeEvent!==eid){cart={};selectedSession='';checkout.pendingTx=null;}
+  if(activeEvent!==eid){cart={};selectedSession='';checkout.pendingTx=null;cashTender='0';paymentMethod='cash';}
   const names=Object.keys(d);
   const results=await Promise.all([cl.rpc('pos_report',{p_event:eid}),...names.map(name=>cl.from(name).select('*').eq('event_id',eid).order(({register_sessions:'opened_at',product_recipes:'product_id',pos_sale_lines:'id',settlement_finalizations:'finalized_at'})[name]||'created_at',{ascending:false}).limit(name==='pos_sale_lines'?600:name==='pos_sales'?200:350))]);
   results.forEach(r=>{if(r.error)throw r.error;});
@@ -68,9 +70,13 @@ export function createV4(ctx){
     ${activeSessions().length?sessionOption():muted(d.pos_registers.length?'営業中のレジがありません。「営業を開始する」から釣銭準備金を登録してください。':'営業中のレジがありません。レジを登録して営業開始してください。')}
     <div class="v4-cart-lines">${Object.entries(cart).filter(([,q])=>q>0).map(([id,q])=>{const p=d.pos_products.find(x=>x.id===id);return p?`<div class="v4-cart-row"><div><strong>${esc(p.name)}</strong><small>${money(Number(p.price)*q)}</small></div><div class="v4-stepper"><button type="button" data-action="v4-cart-remove" data-id="${id}">−</button><strong>${q}</strong><button type="button" data-action="v4-cart-add" data-id="${id}">＋</button></div></div>`:''}).join('')||'<p class="hint">左の商品を押して追加してください。</p>'}</div>
     <div class="v4-total"><span>合計</span><strong>${money(total)}</strong></div>
-    <label class="field"><span>支払方法</span><select id="v4-payment"><option value="cash">現金</option><option value="cashless">キャッシュレス</option></select></label>
-    ${field('お預かり（現金の場合）','tender','number',total,'min="0" step="1" inputmode="numeric" id="v4-tender"')}
-    <div id="v4-change" class="v4-change">お釣り：0円</div>
+    <label class="field"><span>支払方法</span><select id="v4-payment"><option value="cash" ${paymentMethod==='cash'?'selected':''}>現金</option><option value="cashless" ${paymentMethod==='cashless'?'selected':''}>キャッシュレス</option></select></label>
+    <div id="v4-cash-tender" class="v4-cash-tender" ${paymentMethod==='cashless'?'hidden':''}>
+      ${field('お預かり金額','tender','number',cashTender,'min="0" max="999999999" step="1" inputmode="numeric" id="v4-tender" autocomplete="off"')}
+      <div class="v4-denominations" role="group" aria-label="預かり金額を加算する">${DENOMINATIONS.map(n=>`<button type="button" class="v4-denomination" data-action="v4-tender-add" data-amount="${n}" aria-label="${money(n)}を加算">＋${money(n)}</button>`).join('')}<button type="button" class="v4-denomination v4-denomination-clear" data-action="v4-tender-clear" aria-label="お預かり金額を0円に戻す">クリア</button></div>
+      <p class="v4-tender-hint">タップするたびに加算されます。金額欄から直接入力もできます。</p>
+    </div>
+    <div id="v4-change" class="v4-change ${paymentMethod==='cash'&&Number(cashTender)<total?'v4-change-shortage':''}" role="status" aria-live="polite">${paymentMethod==='cashless'?'キャッシュレス決済を確認してください':(()=>{try{const r=tenderBalance(cashTender,total);return r.shortage?`不足：${money(r.shortage)}`:`お釣り：${money(r.change)}`;}catch{return '預かり金額を確認してください';}})()}</div>
     ${btn('会計を確定する','checkout','primary',`style="width:100%" ${!s||s.paused||locked()||!aggregateCart(cart,d.pos_products).items.length?'disabled':''}`)}
     <p class="hint">会計ボタンの二重押し防止・同時販売時の在庫更新はサーバー側で実施します。</p></section>
   </div>
@@ -140,16 +146,18 @@ export function createV4(ctx){
   else if(kind==='refund')await patch('pos_refund',{p_session:s.id,p_sale:pre.id,p_restock:v(fd,'restock')==='true',p_reason:v(fd,'reason')});
   else if(kind==='finalize')await patch('pos_finalize',{p_event:eid,p_note:v(fd,'note')});
  }
- async function checkout(){const s=chosen();if(!s||s.paused||locked())throw Error('営業中のレジが必要です');const {items,total}=aggregateCart(cart,d.pos_products);if(!items.length)throw Error('商品を選んでください');const method=document.querySelector('#v4-payment')?.value||'cash';const received=method==='cash'?Number(document.querySelector('#v4-tender')?.value):null;if(method==='cash'&&(!Number.isSafeInteger(received)||received<total))throw Error('お預かり額が不足しています');
+ async function checkout(){const s=chosen();if(!s||s.paused||locked())throw Error('営業中のレジが必要です');const {items,total}=aggregateCart(cart,d.pos_products);if(!items.length)throw Error('商品を選んでください');const method=document.querySelector('#v4-payment')?.value||'cash';const received=method==='cash'?tenderBalance(document.querySelector('#v4-tender')?.value,total).received:null;if(method==='cash'&&received<total)throw Error('お預かり額が不足しています');
   // 同一会計を通信不安定時に再試行しても二重登録させない。失敗時は同じトークンを保持。
   if(!checkout.pendingTx)checkout.pendingTx=uid();
   if(!confirm(`${money(total)} / ${method==='cash'?'現金':'キャッシュレス'}で会計を確定しますか？`))return;
   const id=await patch('pos_checkout',{p_session:s.id,p_items:items,p_method:method,p_received:received,p_tx:checkout.pendingTx});
-  checkout.pendingTx=null;cart={};ctx.render();ctx.notice(`会計を記録しました（${String(id).slice(0,8)}）`);
+  checkout.pendingTx=null;cart={};cashTender='0';paymentMethod='cash';ctx.render();ctx.notice(`会計を記録しました（${String(id).slice(0,8)}）`);
  }
  async function action(el){const name=el.dataset.action.replace(/^v4-/,'');const n=id=>Number(cart[id]||0);
   if(name==='cart-add'||name==='cart-remove'){const id=el.dataset.id;if(!d.pos_products.some(p=>p.id===id&&p.active))return;const next=n(id)+(name==='cart-add'?1:-1);cart[id]=Math.min(9999,Math.max(0,next));ctx.render();return true;}
-  if(name==='cart-clear'){cart={};ctx.render();return true;}
+  if(name==='cart-clear'){cart={};cashTender='0';ctx.render();return true;}
+  if(name==='tender-add'){const amount=Number(el.dataset.amount);cashTender=String(addDenomination(document.querySelector('#v4-tender')?.value??cashTender,amount));const t=document.querySelector('#v4-tender');if(t)t.value=cashTender;change(t||{id:'v4-tender'});return true;}
+  if(name==='tender-clear'){cashTender='0';const t=document.querySelector('#v4-tender');if(t)t.value='0';change(t||{id:'v4-tender'});return true;}
   if(name==='checkout'){await checkout();return true;}
   if(name==='open-register'){ctx.openV4('register');return true;}
   if(name==='open-session'){ctx.openV4('open-session');return true;}
@@ -162,7 +170,15 @@ export function createV4(ctx){
   }
   return false;
  }
- function change(el){if(el.id==='v4-session-choice'){selectedSession=el.value;ctx.render();return true;}if(el.id==='v4-tender'||el.id==='v4-payment'){const p=document.querySelector('#v4-payment')?.value,t=document.querySelector('#v4-tender'),res=document.querySelector('#v4-change');if(!t||!res)return true;if(p==='cashless'){t.closest('label').style.display='none';res.textContent='キャッシュレス決済を確認してください';}else{t.closest('label').style.display='';const total=aggregateCart(cart,d.pos_products).total;res.textContent=`お釣り：${money(Math.max(0,Number(t.value||0)-total))}`;}return true;}return false;}
+ function change(el){if(el.id==='v4-session-choice'){selectedSession=el.value;ctx.render();return true;}if(el.id==='v4-tender'||el.id==='v4-payment'){
+   const p=document.querySelector('#v4-payment')?.value||paymentMethod,t=document.querySelector('#v4-tender'),res=document.querySelector('#v4-change'),cashBlock=document.querySelector('#v4-cash-tender');
+   paymentMethod=p;if(t)cashTender=t.value;
+   if(cashBlock)cashBlock.hidden=(p==='cashless');
+   if(!res)return true;
+   if(p==='cashless'){res.textContent='キャッシュレス決済を確認してください';res.classList.remove('v4-change-shortage');}
+   else{const total=aggregateCart(cart,d.pos_products).total;try{const b=tenderBalance(cashTender,total);res.textContent=b.shortage?`不足：${money(b.shortage)}`:`お釣り：${money(b.change)}`;res.classList.toggle('v4-change-shortage',b.shortage>0);}catch{res.textContent='預かり金額を確認してください';res.classList.add('v4-change-shortage');}}
+   return true;
+  }return false;}
  function saveCsv(name,rows){const safe=x=>{let s=String(x??'');if(/^\s*[=+@-]/.test(s)&&!/^[-+]?\d+(\.\d+)?$/.test(s))s="'"+s;return `"${s.replaceAll('"','""')}"`;};const csv='\ufeff'+rows.map(x=>x.map(safe).join(',')).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);}
  async function getAll(table){const eid=event(),cl=ctx.client();let rows=[];const order=({register_sessions:'opened_at',product_recipes:'product_id',pos_sale_lines:'id',pos_sale_consumption:'id',settlement_finalizations:'finalized_at'})[table]||'created_at';for(let start=0;;start+=500){const r=await cl.from(table).select('*').eq('event_id',eid).order(order,{ascending:true}).range(start,start+499);if(r.error)throw r.error;rows.push(...r.data);if(r.data.length<500)break;if(start>50000)throw Error('出力件数が多すぎます。管理者に連絡してください');}return rows;}
  async function exportCsv(){const [sales,refunds,lines]=await Promise.all([getAll('pos_sales'),getAll('pos_refunds'),getAll('pos_sale_lines')]);saveCsv('gakusai-v4-sales.csv',[['種別','日時','取引ID','商品','数量','税込単価','支払方法','金額','返金理由'],...sales.flatMap(x=>lines.filter(l=>l.sale_id===x.id).map(l=>['販売',x.created_at,x.id,l.product_name,l.quantity,l.unit_price,x.method,l.unit_price*l.quantity,''])),...refunds.map(x=>['全額返金',x.created_at,x.sale_id,'','','',x.method,-x.amount,x.reason])]);}

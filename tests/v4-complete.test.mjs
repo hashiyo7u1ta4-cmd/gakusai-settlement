@@ -62,6 +62,6 @@ test('migration changes constraints and functions without dropping transaction t
  assert.doesNotMatch(cancel,/p_require_admin/);
 });
 test('service worker version changes and caches additional mobile CSS',()=>{
- const sw=read('sw.js');assert.match(sw,/gakusai-settlement-v4-1-complete/);
+ const sw=read('sw.js');assert.match(sw,/gakusai-settlement-v4-2-cash-ux/);
  assert.match(sw,/\.\/v4\.1\.css/);assert.match(html,/v4\.1\.css/);
 });

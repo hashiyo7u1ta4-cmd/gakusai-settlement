@@ -1,0 +1,12 @@
+/* v4.2 POS money keypad: fingertip-sized controls and accessible cash status. */
+.v4-cash-tender{display:grid;gap:6px}
+.v4-cash-tender[hidden]{display:none!important}
+.v4-denominations{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:4px}
+.v4-denomination{display:flex;justify-content:center;align-items:center;min-height:48px;min-width:0;padding:9px 4px;background:#eff6f1;color:#1b503a;border:1px solid #c2d6c8;border-radius:10px;font-weight:750;font-size:14px;font-variant-numeric:tabular-nums;touch-action:manipulation;white-space:nowrap;user-select:none}
+.v4-denomination:hover{background:#e0eee5;border-color:#93bca5}
+.v4-denomination:active{background:#c9e0d1;transform:scale(.985)}
+.v4-denomination-clear{background:#fff;border-color:#d8deda;color:#52635b;grid-column:1/-1;min-height:44px}
+.v4-tender-hint{font-size:11px;color:#647c6e;margin:1px 0 4px}
+.v4-change-shortage{color:#aa4a32}
+@media(max-width:700px){.v4-denomination{min-height:52px;font-size:14px}.v4-denominations{gap:7px}}
+@media(max-width:365px){.v4-denomination{font-size:12px}}
