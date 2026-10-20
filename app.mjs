@@ -59,7 +59,7 @@ function landingView(){setSync(user?'ログイン済み':'参加待ち');const m
  $('#view').innerHTML=`<div class="auth-wrap">${heading('学祭精算に参加','この出店の参加者は共通データを閲覧し、各自の貢献・立替を記録できます。')}${members}<div class="auth-grid"><section class="panel auth-panel"><h2>${modeTitle[authMode]}</h2><p>${authMode==='join'?'管理者から受け取った招待コードで参加できます。':authMode==='create'?'最初にイベントを作成した人が管理者になります。':'ブラウザを変更した管理者向け。管理者復旧キーが必要です。'}</p><form id="auth-form" class="compact-form">${codes}<button class="btn btn-primary" type="submit" ${busy?'disabled':''}>${authMode==='join'?'参加する':authMode==='create'?'作成する':'復旧する'}</button></form><div class="auth-alt"><button type="button" data-auth="join">参加</button><button type="button" data-auth="create">新規作成</button><button type="button" data-auth="recover">管理者復旧</button></div></section><section class="panel auth-panel"><h2>共有と承認について</h2><p>一般参加者の入力は「承認待ち」になります。管理者が承認した記録だけを精算に反映します。</p><div class="notice-box">・メールアドレス不要<br>・参加者ごとに記録の提出者を区別<br>・他人の申請は変更不可<br>・各端末から最新の精算結果を表示</div><p class="warning-box">匿名IDはこのブラウザに紐付きます。ブラウザのデータ削除・ログアウトで本人IDに戻れません。管理者は復旧キーを必ず別の安全な場所に保管してください。</p></section></div></div>`;
 }
 async function ensureUser(){if(user)return user;const {data,error}=await client.auth.signInAnonymously();if(error)throw error;user=data.user;return user;}
-async function authSubmit(e){e.preventDefault();if(busy)return;const fd=new FormData(e.currentTarget);busy=true;render();try{
+async function authSubmit(e){e.preventDefault();if(busy)return;const fd=new FormData(e.target);busy=true;render();try{
   const displayName=String(fd.get('displayName')||'').trim();if(!displayName||displayName.length>40)throw Error('表示名を入力してください。');
   await ensureUser();let id;
   if(authMode==='create'){
@@ -140,7 +140,7 @@ function openForm(kind,pre={}){if(!eventId)return;if(['budget','rates','transfer
  $('#edit-dialog').dataset.kind=kind;$('#dialog-title').textContent=title;$('#dialog-fields').innerHTML=fields;$('#edit-dialog').showModal();}
 function number(fd,key,{integer=false,positive=false}={}){const raw=String(fd.get(key)??'').trim();if(!raw)throw Error(`${key}を入力してください。`);const n=Number(raw);if(!Number.isFinite(n)||n<0||n>999999999||(positive&&n<=0)||(integer&&!Number.isSafeInteger(n)))throw Error(`${key} の数値が正しくありません。`);return n;}
 function textVal(fd,key){return String(fd.get(key)||'').trim();}
-async function formSubmit(e){e.preventDefault();if(busy)return;const kind=$('#edit-dialog').dataset.kind;const fd=new FormData(e.currentTarget);const admin=isAdmin();busy=true;$('#submit-button').disabled=true;
+async function formSubmit(e){e.preventDefault();if(busy)return;const kind=$('#edit-dialog').dataset.kind;const fd=new FormData(e.target);const admin=isAdmin();busy=true;$('#submit-button').disabled=true;
  try{let table,payload;
   if(kind==='budget'){const name=textVal(fd,'eventName');if(!name)throw Error('出店名を入力してください');check(await client.from('events').update({event_name:name,sales:number(fd,'sales',{integer:true}),reserve:number(fd,'reserve',{integer:true})}).eq('id',eventId));}
   else if(kind==='rates'){const rates={};for(const t of TYPES){rates[t.id]=number(fd,t.id);if(Math.abs(rates[t.id]*100-Math.round(rates[t.id]*100))>1e-7)throw Error('ポイントは小数第2位まで');}check(await client.from('events').update({rates}).eq('id',eventId));}
