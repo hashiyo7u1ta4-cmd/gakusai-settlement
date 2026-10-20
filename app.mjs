@@ -1,282 +1,198 @@
-import { TYPES, FUND, defaultData, calculate, validateImport } from './engine.mjs';
+import { TYPES, FUND, defaultData, calculate } from './engine.mjs';
+import { normalizeCloud } from './cloud-model.mjs';
 
-const STORE_KEY = 'gakusai-settlement-data-v1';
+const cfg = window.GAKUSAI_CONFIG || {};
+const $ = (s) => document.querySelector(s);
 const NAV = [
-  {id:'dashboard', label:'概要', icon:'▦'},
-  {id:'activities', label:'貢献記録', icon:'◷'},
-  {id:'expenses', label:'立替・経費', icon:'▤'},
-  {id:'money', label:'資金・精算', icon:'↔'},
-  {id:'settings', label:'参加者・設定', icon:'⚙'},
+  {id:'dashboard',label:'概要',icon:'▦'},
+  {id:'activities',label:'貢献記録',icon:'◷'},
+  {id:'expenses',label:'立替・経費',icon:'▤'},
+  {id:'money',label:'資金・精算',icon:'↔'},
+  {id:'reviews',label:'承認待ち',icon:'✓'},
+  {id:'settings',label:'参加者・設定',icon:'⚙'},
 ];
-const $ = selector => document.querySelector(selector);
-const yen = n => `${Math.abs(n).toLocaleString('ja-JP')}円`;
-const signedYen = n => `${n < 0 ? '−' : ''}${yen(n)}`;
-const points = n => Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toString();
-const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const uid = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-const dateToday = () => {const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
-const dateLabel = d => d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.replaceAll('-','/') : '日付なし';
-const sum = (rows, f=x=>x.amount) => rows.reduce((acc,row)=>acc+f(row),0);
-const typeName = type => TYPES.find(t=>t.id===type)?.label ?? 'その他';
-const short = text => text && text.length > 30 ? text.slice(0,30)+'…' : (text || '—');
-const strOr = (value, fallback='') => (typeof value === 'string' ? value : fallback);
-let state;
-try { const raw=localStorage.getItem(STORE_KEY); state=raw ? validateImport(JSON.parse(raw)) : defaultData(); }
-catch(err) { console.warn('Cannot load stored data:',err); state=defaultData(); alert('保存データを読み込めませんでした。上書きする前に、ブラウザ内のデータを確認してください。'); }
-let currentTab='dashboard';
-let editing = null;
-let toastTimer;
-
-function save() {
-  try {localStorage.setItem(STORE_KEY, JSON.stringify(state));}
-  catch(err){alert('ブラウザへの保存に失敗しました。容量不足やプライベートモードをご確認ください。バックアップを保存してください。'); throw err;}
-}
-function mutate(fn){fn(); save(); render();}
-function notice(message){const el=$('#toast'); el.textContent=message; el.classList.add('show'); clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2600);}
-function named(id){return id===FUND ? '運営金庫' : state.people.find(p=>p.id===id)?.name ?? '(未登録)';}
-function navRender(){
-  const markup=NAV.map(n=>`<button type="button" class="nav-item ${currentTab===n.id?'active':''}" data-tab="${n.id}" aria-current="${currentTab===n.id?'page':'false'}"><span class="nav-icon">${n.icon}</span><span>${n.label}</span></button>`).join('');
-  $('#desktop-nav').innerHTML=markup;
-  $('#mobile-nav').innerHTML=markup;
-}
-function heading(title,desc,actions='') {return `<div class="page-heading"><div><h1>${title}</h1><p>${desc}</p></div><div class="heading-actions">${actions}</div></div>`;}
-function button(label,action,variant='primary',extra=''){return `<button type="button" class="btn btn-${variant}" data-action="${action}" ${extra}>${label}</button>`;}
-function empty(title,description,action='',label='') {return `<div class="empty"><div class="empty-mark">—</div><strong>${title}</strong><p>${description}</p>${action?button(label,action,'soft'):''}</div>`;}
-function metric(label,value,foot='',tone=''){return `<div class="metric"><span class="metric-label">${label}</span><strong class="metric-value ${tone}">${value}</strong>${foot?`<small>${foot}</small>`:''}</div>`;}
-function summaryPerson(p){return `<div class="person-summary-row"><div class="person-ident"><span class="avatar">${esc(p.name.slice(0,1))}</span><div><strong>${esc(p.name)}</strong><small>${points(p.points)} pt / 分配 ${yen(p.share)}</small></div></div><span class="amount ${p.balance<0?'negative':''}">${p.balance<0?'支払 '+yen(p.balance):'受取 '+yen(p.balance)}</span></div>`;}
-
-function dashboardView(c) {
-  const netNotice = c.net<0 ? `<div class="alert alert-danger"><strong>赤字 ${yen(c.net)}</strong>　利益配分は実行されません。追加負担のルールは参加者間で決めてください。</div>`
-    : c.net>0 && !c.totalPoints ? `<div class="alert alert-warn">貢献ポイントが未登録のため、利益 ${yen(c.net)} はまだ配分していません。</div>` : '';
-  const allocations = c.byPerson.length ? c.byPerson.map(summaryPerson).join('') : empty('参加者がいません','参加者を追加してから、貢献や立替を登録します。','add-person','参加者を追加');
-  const latest = [
-    ...state.activities.map(a=>({kind:'貢献',when:a.date,title:`${named(a.personId)} / ${typeName(a.type)}`,detail:`${points(a.quantity*a.rate)} pt`})),
-    ...state.expenses.map(e=>({kind:e.paidBy===FUND?'経費':'立替',when:e.date,title:e.title,detail:`${yen(e.amount)} / ${named(e.paidBy)}`})),
-    ...state.deposits.map(d=>({kind:'拠出',when:d.date,title:`${named(d.personId)} / 運営資金`,detail:yen(d.amount)})),
-    ...state.transfers.map(t=>({kind:'送金',when:t.date,title:`${named(t.from)} → ${named(t.to)}`,detail:yen(t.amount)})),
-  ].sort((a,b)=>b.when.localeCompare(a.when)).slice(0,5);
-  return `
-    ${heading(esc(state.eventName),'売上の分配と立替精算をまとめて確認します。',button('売上・留保金を設定','edit-budget'))}
-    ${netNotice}
-    <div class="metric-grid">${metric('売上総額',yen(c.sales),'手入力した総額')}${metric('経費合計',yen(c.expensesTotal),'立替分を含む')}${metric('分配対象利益',signedYen(c.net),'売上 − 経費 − 留保金',c.net<0?'negative':'positive')}${metric('貢献ポイント合計',`${points(c.totalPoints)} pt`,`${state.people.length} 人の参加者`)}</div>
-    <div class="content-grid">
-      <section class="panel"><div class="panel-heading"><h2>参加者別の受取予定額</h2><button class="text-link" data-tab="money">精算を確認 →</button></div><p class="panel-description">利益配分と立替・拠出の返金を含む、送金記録反映後の残額です。</p><div class="row-list">${allocations}</div></section>
-      <section class="panel"><div class="panel-heading"><h2>精算状況</h2></div><div class="settlement-facts"><div><span>運営金庫の現在残高</span><strong>${signedYen(c.fundCash)}</strong></div><div><span>留保金</span><strong>${yen(c.reserve)}</strong></div><div><span>金庫の精算可能額</span><strong class="${c.fundAvailable<0?'negative':''}">${signedYen(c.fundAvailable)}</strong></div><div><span>残りの送金候補</span><strong>${c.blocked?'—':c.suggestions.length+' 件'}</strong></div></div>${c.blocked?`<p class="hint warn-text">${esc(c.blocked)}</p>`:button('送金案を見る','goto-money','soft','data-goto="money"')}</section>
-      <section class="panel"><div class="panel-heading"><h2>最近の記録</h2></div>${latest.length?`<div class="row-list">${latest.map(x=>`<div class="history-row"><div><span class="tag">${x.kind}</span><strong>${esc(x.title)}</strong><small>${dateLabel(x.when)}</small></div><span>${esc(x.detail)}</span></div>`).join('')}</div>`:empty('まだ記録がありません','貢献や立替が発生したら追加してください。')}</section>
-      <section class="panel"><div class="panel-heading"><h2>記録を追加</h2></div><div class="quick-actions">${button('貢献を記録','add-activity','light')}${button('立替・経費を記録','add-expense','light')}${button('運営資金の拠出','add-deposit','light')}${button('送金を記録','add-transfer','light')}</div><p class="hint">買い出し等のポイントと、購入費用の立替は別々に記録します。</p></section>
-    </div>`;
-}
-function activitiesView(c){
-  const people = [...c.byPerson].sort((a,b)=>b.points-a.points);
-  const max = Math.max(1,...people.map(p=>p.points));
-  const table = [...state.activities].sort((a,b)=>b.date.localeCompare(a.date)).map(a=>`
-    <div class="entry-row"><div class="entry-main"><strong>${esc(named(a.personId))}</strong><span class="tag">${esc(typeName(a.type))}</span><small>${dateLabel(a.date)}${a.note?' ・ '+esc(short(a.note)):''}</small></div><div class="entry-right"><strong>${points(a.quantity*a.rate)} pt</strong><small>${points(a.quantity)} 回 × ${points(a.rate)} pt</small></div><div class="entry-buttons"><button data-action="edit-activity" data-id="${esc(a.id)}">編集</button><button data-action="delete-activity" data-id="${esc(a.id)}" class="delete">削除</button></div></div>`).join('');
-  return `${heading('貢献記録','準備・買い出し・車出し・当日運営などをポイント化します。',button('貢献を追加','add-activity'))}
-    <div class="content-grid"><section class="panel"><div class="panel-heading"><h2>参加者別ポイント</h2><span class="muted">合計 ${points(c.totalPoints)} pt</span></div>${people.length?people.map(p=>`<div class="point-row"><div class="point-row-head"><strong>${esc(p.name)}</strong><span>${points(p.points)} pt</span></div><div class="progress"><div style="width:${100*p.points/max}%"></div></div></div>`).join(''):empty('参加者を登録してください','設定画面で名前を追加します。','add-person','参加者を追加')}</section>
-    <section class="panel"><div class="panel-heading"><h2>ポイント単価</h2><button class="text-link" data-tab="settings">設定を変更 →</button></div><div class="rate-list">${TYPES.map(t=>`<div><span>${t.label}</span><strong>${points(state.rates[t.id])} pt / 回</strong></div>`).join('')}</div><p class="hint">変更した単価は新しい記録から適用。過去の記録は変更されません。</p></section></div>
-    <section class="panel panel-full"><div class="panel-heading"><h2>貢献の履歴</h2><span class="muted">${state.activities.length} 件</span></div>${table||empty('まだ貢献記録がありません','作業を行った人・内容・回数を登録します。','add-activity','最初の貢献を記録')}</section>`;
-}
-function expensesView(c){
-  const rows=[...state.expenses].sort((a,b)=>b.date.localeCompare(a.date)).map(e=>`
-  <div class="entry-row"><div class="entry-main"><strong>${esc(e.title)}</strong><span class="tag">${e.paidBy===FUND?'金庫払い':'立替'}</span><small>${dateLabel(e.date)}${e.note?' ・ '+esc(short(e.note)):''}</small></div><div class="entry-right"><strong>${yen(e.amount)}</strong><small>${esc(named(e.paidBy))}が支払</small></div><div class="entry-buttons"><button data-action="edit-expense" data-id="${esc(e.id)}">編集</button><button data-action="delete-expense" data-id="${esc(e.id)}" class="delete">削除</button></div></div>`).join('');
-  return `${heading('立替・経費','出店に使った費用と、誰が支払ったかを記録します。',button('経費を追加','add-expense'))}
-    <div class="metric-grid three">${metric('経費合計',yen(c.expensesTotal))}${metric('個人の立替合計',yen(c.personalExpenses),'利益配分とは別に返済')}${metric('運営金庫からの支出',yen(c.fundExpenses))}</div>
-    <div class="alert alert-info">買い出しに行った人の<strong>貢献ポイント</strong>は「貢献記録」で、材料代などの<strong>購入費用</strong>はここで登録します。同じ支出を二重登録しないでください。</div>
-    <section class="panel panel-full"><div class="panel-heading"><h2>支出一覧</h2><span class="muted">${state.expenses.length} 件</span></div>${rows||empty('経費の記録がありません','材料費・備品代・ガソリン代などを登録してください。','add-expense','経費を追加')}</section>`;
-}
-function moneyView(c){
-  const transfers = [...state.transfers].sort((a,b)=>b.date.localeCompare(a.date)).map(t=>`<div class="entry-row"><div class="entry-main"><strong>${esc(named(t.from))} → ${esc(named(t.to))}</strong><small>${dateLabel(t.date)}${t.note?' ・ '+esc(short(t.note)):''}</small></div><div class="entry-right"><strong>${yen(t.amount)}</strong></div><div class="entry-buttons"><button data-action="edit-transfer" data-id="${esc(t.id)}">編集</button><button class="delete" data-action="delete-transfer" data-id="${esc(t.id)}">削除</button></div></div>`).join('');
-  const deposits = [...state.deposits].sort((a,b)=>b.date.localeCompare(a.date)).map(d=>`<div class="entry-row"><div class="entry-main"><strong>${esc(named(d.personId))} → 運営金庫</strong><small>${dateLabel(d.date)}${d.note?' ・ '+esc(short(d.note)):''}</small></div><div class="entry-right"><strong>${yen(d.amount)}</strong></div><div class="entry-buttons"><button data-action="edit-deposit" data-id="${esc(d.id)}">編集</button><button class="delete" data-action="delete-deposit" data-id="${esc(d.id)}">削除</button></div></div>`).join('');
-  const perPerson=c.byPerson.map(p=>`<tr><td><strong>${esc(p.name)}</strong><small>${points(p.points)} pt</small></td><td class="num">${yen(p.share)}</td><td class="num">${yen(p.paidExpenses)}</td><td class="num">${yen(p.contributed)}</td><td class="num">${signedYen(p.received-p.sent)}</td><td class="num bold ${p.balance<0?'negative':'positive'}">${signedYen(p.balance)}</td></tr>`).join('');
-  const suggestions=c.suggestions.map((s,i)=>`<div class="settlement-row"><span class="step">${i+1}</span><div class="settlement-description"><strong>${esc(s.fromName)} <span class="arrow">→</span> ${esc(s.toName)}</strong><small>送金する金額</small></div><strong class="settlement-sum">${yen(s.amount)}</strong><button class="btn btn-soft btn-small" data-action="record-suggestion" data-from="${esc(s.from)}" data-to="${esc(s.to)}" data-amount="${s.amount}">支払いを記録</button></div>`).join('');
-  return `${heading('資金・精算','運営金庫への拠出・参加者間の送金・最終的な支払先を管理します。',button('送金を記録','add-transfer'))}
-  <div class="metric-grid three">${metric('運営金庫残高',signedYen(c.fundCash),'売上 ＋ 拠出 − 金庫支出 ± 送金')}${metric('留保金',yen(c.reserve))}${metric('精算可能な金庫残高',signedYen(c.fundAvailable),'金庫残高 − 留保金',c.fundAvailable<0?'negative':'')}</div>
-  <section class="panel panel-full"><div class="panel-heading"><h2>自動精算案</h2><span class="muted">${c.blocked?'要確認':c.suggestions.length+' 件'}</span></div><p class="panel-description">現在のポイント配分・立替・拠出・送金履歴から、残額を解消するための送金先を算出します。</p>
-  ${c.blocked?`<div class="alert alert-warn">${esc(c.blocked)}</div>`:c.suggestions.length?suggestions:empty('未精算の送金はありません','現在の記録では残額がありません。')}<p class="hint">送金はこのアプリから実行されません。現金・銀行振込等で実際に支払った後、「支払いを記録」を押してください。</p></section>
-  <section class="panel panel-full"><div class="panel-heading"><h2>参加者別の精算内訳</h2></div><div class="table-scroll"><table><thead><tr><th>参加者</th><th>利益配分</th><th>経費立替</th><th>資金拠出</th><th>受取済−支払済</th><th>受取残額</th></tr></thead><tbody>${perPerson||'<tr><td colspan="6">参加者がいません</td></tr>'}</tbody></table></div><p class="hint">マイナスの受取残額は、返金または追加支払いが必要な金額を示します。</p></section>
-  <div class="content-grid"><section class="panel"><div class="panel-heading"><h2>運営資金の拠出</h2>${button('追加','add-deposit','light')}</div><p class="panel-description">仕入れ前に金庫へ入れた自己資金など。費用ではなく返金対象です。</p><div class="row-list">${deposits||empty('拠出記録なし','立替で購入した場合は、こちらではなく経費に登録します。')}</div></section>
-  <section class="panel"><div class="panel-heading"><h2>支払い・送金履歴</h2>${button('追加','add-transfer','light')}</div><p class="panel-description">送金や返金が完了したときだけ記録します。</p><div class="row-list">${transfers||empty('送金履歴なし','まだ精算の支払いは記録されていません。')}</div></section></div>`;
-}
-function settingsView(){
-  const people=state.people.map(p=>`<div class="person-setting"><div class="person-ident"><span class="avatar">${esc(p.name.slice(0,1))}</span><strong>${esc(p.name)}</strong></div><div class="entry-buttons"><button data-action="edit-person" data-id="${esc(p.id)}">編集</button><button class="delete" data-action="delete-person" data-id="${esc(p.id)}">削除</button></div></div>`).join('');
-  return `${heading('参加者・設定','メンバー、分配ルール、売上とバックアップを管理します。',button('参加者を追加','add-person'))}
-  <div class="content-grid">
-    <section class="panel"><div class="panel-heading"><h2>参加者</h2><span class="muted">${state.people.length} 人</span></div><div class="row-list">${people||empty('参加者を追加してください','精算対象のメンバーを登録します。','add-person','追加')}</div></section>
-    <section class="panel"><div class="panel-heading"><h2>イベント・売上</h2></div><div class="rate-list"><div><span>イベント名</span><strong>${esc(state.eventName)}</strong></div><div><span>売上総額</span><strong>${yen(state.sales)}</strong></div><div><span>留保金</span><strong>${yen(state.reserve)}</strong></div></div>${button('イベント情報を編集','edit-budget','soft')}</section>
-    <section class="panel"><div class="panel-heading"><h2>ポイント配点</h2></div><p class="panel-description">ポイントは、利益を参加者間で配分するための重みです。回数の基準と単価は運営メンバーで事前に決めてください。</p><div class="rate-list">${TYPES.map(t=>`<div><span>${t.label}</span><strong>${points(state.rates[t.id])} pt / 回</strong></div>`).join('')}</div>${button('ポイント単価を編集','edit-rates','soft')}<p class="hint">新しい貢献記録にのみ適用します。以前の記録は編集しない限り変更しません。</p></section>
-    <section class="panel"><div class="panel-heading"><h2>データの保存・移行</h2></div><div class="setting-actions">${button('JSONをバックアップ','download-backup','light')}${button('バックアップを復元','import-backup','light')}${button('CSVを出力','export-csv','light')}</div><p class="hint">データはこのブラウザだけに保存されます。スマホとPCの自動同期はありません。端末変更・ブラウザデータ削除に備え、JSONファイルを定期的に保存してください。</p></section>
-    <section class="panel"><div class="panel-heading"><h2>検証・初期化</h2></div><div class="setting-actions">${button('サンプルデータを読み込む','load-demo','light')}${button('すべて初期化','reset-data','danger')}</div><p class="hint">現在のデータを置き換えます。操作前にバックアップを保存してください。</p></section>
-  </div>`;
-}
-function render(){
-  navRender();
-  $('#top-label').textContent=state.eventName;
+const localKey='gakusai-cloud-selected-event-v2';
+const yen=n=>`${Math.abs(n).toLocaleString('ja-JP')}円`;
+const signedYen=n=>`${n<0?'−':''}${yen(n)}`;
+const points=n=>Number(n).toLocaleString('ja-JP',{maximumFractionDigits:2});
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const day=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+const dateLabel=d=>d?String(d).slice(0,10).replaceAll('-','/'):'—';
+const typeLabel=t=>TYPES.find(x=>x.id===t)?.label||'その他';
+const code=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+const statusText=s=>({pending:'承認待ち',approved:'承認済み',rejected:'却下'}[s]||s);
+const statusHtml=s=>`<span class="status-tag ${s}">${statusText(s)}</span>`;
+const field=(label,name,type='text',value='',attrs='')=>`<label class="field"><span>${esc(label)}</span><input type="${type}" name="${name}" value="${esc(value)}" ${attrs} required></label>`;
+const select=(label,name,options)=>`<label class="field"><span>${esc(label)}</span><select name="${name}" required>${options}</select></label>`;
+const notes=()=>`<label class="field"><span>メモ（任意）</span><textarea name="note" maxlength="300" rows="2" placeholder="内容・用途など"></textarea></label>`;
+const money=(label,name,value='1',zero=false)=>field(label,name,'number',value,`min="${zero?0:1}" max="999999999" step="1" inputmode="numeric"`);
+const button=(title,action,sty='soft',extra='')=>`<button type="button" class="btn btn-${sty}" data-action="${action}" ${extra}>${esc(title)}</button>`;
+const metric=(label,value,desc='')=>`<div class="metric"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong><small>${desc}</small></div>`;
+const panel=(name,inner,right='')=>`<section class="panel"><div class="panel-heading"><h2>${name}</h2>${right}</div>${inner}</section>`;
+const heading=(title,sub,action='')=>`<div class="page-heading"><div><h1>${title}</h1><p>${sub}</p></div><div class="heading-actions">${action}</div></div>`;
+let client=null, user=null, memberships=[], eventId=null, currentEvent=null, people=[], records={activities:[],expenses:[],deposits:[],transfers:[]};
+let state=defaultData(), tab='dashboard', authMode='join', pending=false, toastTimer, channel=null, lastLoadedAt=0, busy=false;
+const isAdmin=()=>memberships.some(m=>m.event_id===eventId&&m.role==='admin');
+const me=()=>people.find(p=>p.id===user?.id);
+const named=id=>id===FUND?'運営金庫':people.find(x=>x.id===id)?.name||'（退会済み）';
+const byDate=list=>[...list].sort((a,b)=>b.date.localeCompare(a.date)||String(b.created_at||'').localeCompare(String(a.created_at||'')));
+const reviewCount=()=>[...records.activities,...records.expenses,...records.deposits].filter(x=>x.status==='pending').length;
+function notice(message){const e=$('#toast');e.textContent=message;e.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.classList.remove('show'),4000);}
+function errMsg(e){let m=String(e?.message||e);if(/row-level security|permission denied|42501/i.test(m))return 'この操作の権限がありません。自分の記録、または管理者の権限を確認してください。';if(/duplicate key|23505/.test(m))return '同じデータがすでに登録されています。';if(/Failed to fetch|network|fetch failed/i.test(m))return 'ネットワークに接続できません。通信状況を確認してください。';return m;}
+function showError(e){console.error(e);alert(errMsg(e));}
+function check(result){if(result.error)throw result.error;return result.data;}
+function writeCSV(rows){return '\ufeff'+rows.map(row=>row.map(v=>{let s=String(v??'');if(/^\s*[=+@-]/.test(s)&&!/^[-+]?\d+(\.\d+)?$/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';}).join(',')).join('\r\n');}
+function download(name,data,type){const url=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+const promptCode=key=>{try{return localStorage.getItem(`gakusai-v2-${key}-${eventId}`)||'';}catch{return '';}};
+function cacheCode(key,value){try{localStorage.setItem(`gakusai-v2-${key}-${eventId}`,value);}catch{notice('この端末でコードを記憶できません。安全な場所に控えてください。');}}
+const setSync=(txt,err=false)=>{const e=$('#sync-label');e.textContent=txt;e.classList.toggle('sync-error',err);};
+function navRender(){const markup=NAV.filter(n=>n.id!=='reviews'||isAdmin()).map(n=>`<button class="nav-item ${tab===n.id?'active':''}" type="button" data-tab="${n.id}"><span class="nav-icon">${n.icon}</span><span>${n.label}${n.id==='reviews'&&reviewCount()?`（${reviewCount()}）`:''}</span></button>`).join('');$('#desktop-nav').innerHTML=eventId?markup:'';$('#mobile-nav').innerHTML=eventId?markup:'';}
+function render(){navRender();$('#top-label').textContent=currentEvent?.event_name||'学祭精算';if(!client){return setupView();}if(!eventId){return landingView();}
   const c=calculate(state);
-  const map={dashboard:()=>dashboardView(c),activities:()=>activitiesView(c),expenses:()=>expensesView(c),money:()=>moneyView(c),settings:()=>settingsView(c)};
-  $('#view').innerHTML=map[currentTab]();
+  $('#view').innerHTML=({dashboard:dashboardView,activities:activitiesView,expenses:expensesView,money:moneyView,reviews:reviewsView,settings:settingsView}[tab]||dashboardView)(c);
+  $('#view').querySelectorAll('[data-percent]').forEach(el=>{el.style.width=Math.max(0,Math.min(100,Number(el.dataset.percent)))+'%';});
 }
-function selectTab(tab){if(NAV.some(n=>n.id===tab)){currentTab=tab;render();window.scrollTo({top:0,behavior:'instant'});}}
-
-function optionsPeople(current, includeFund=false){return `${includeFund?`<option value="fund" ${current===FUND?'selected':''}>運営金庫</option>`:''}${state.people.map(p=>`<option value="${esc(p.id)}" ${current===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}`;}
-function inputField(label,name,type='text',value='',other=''){return `<label class="field"><span>${label}</span><input name="${name}" type="${type}" value="${esc(value)}" ${other} required></label>`;}
-function selectField(label,name,options){return `<label class="field"><span>${label}</span><select name="${name}" required>${options}</select></label>`;}
-function noteField(value=''){return `<label class="field"><span>メモ（任意）</span><textarea name="note" rows="2" maxlength="300" placeholder="内容・用途など">${esc(value)}</textarea></label>`;}
-function moneyField(label,name,value=0){return inputField(label,name,'number',value,'min="0" max="999999999" step="1" inputmode="numeric"');}
-function requiredMoneyField(label,name,value=1){return inputField(label,name,'number',value,'min="1" max="999999999" step="1" inputmode="numeric"');}
-function dateField(value){return inputField('日付','date','date',value || dateToday());}
-function openForm(kind,id=null,pre={}){
-  const collection = {person:'people',activity:'activities',expense:'expenses',deposit:'deposits',transfer:'transfers'}[kind];
-  const record=collection && id ? state[collection].find(x=>x.id===id) : null;
-  editing={kind,id};
-  let title='';let fields='';
-  if(kind==='person') {
-    title=id?'参加者を編集':'参加者を追加';
-    fields=inputField('名前','name','text',record?.name || '','maxlength="40" placeholder="例：佐藤"');
-  } else if(kind==='activity'){
-    if(!state.people.length) return needPerson();
-    const a=record||{}; const type=a.type||'prep';
-    title=id?'貢献記録を編集':'貢献を記録';
-    fields=selectField('参加者','personId',optionsPeople(a.personId||pre.personId||state.people[0]?.id))+
-      selectField('作業の種類','type',TYPES.map(t=>`<option value="${t.id}" ${type===t.id?'selected':''}>${t.label}</option>`).join(''))+
-      `<div class="field-two">${inputField('回数・量','quantity','number',a.quantity??1,'min="0.01" max="100000" step="any" inputmode="decimal"')}${inputField('1回あたりのポイント','rate','number',a.rate??state.rates[type],'min="0" max="100000" step="any" inputmode="decimal"')}</div>`+
-      `<p class="field-helper">「1回」の基準をあらかじめ決めてください。例：買い出し1回、車出し1往復など。</p>`+dateField(a.date)+noteField(a.note);
-  } else if(kind==='expense') {
-    title=id?'経費を編集':'立替・経費を記録';const e=record||{};
-    fields=inputField('支出の内容','title','text',e.title||'','maxlength="100" placeholder="例：材料・容器代"')+requiredMoneyField('金額（円）','amount',e.amount??1)+selectField('実際に支払った人','paidBy',optionsPeople(e.paidBy||pre.paidBy||FUND,true))+dateField(e.date)+noteField(e.note)+`<p class="field-helper">「運営金庫」払いは立替精算されません。参加者が私費で払った場合のみ、その人を選択します。</p>`;
-  } else if(kind==='deposit'){
-    if(!state.people.length)return needPerson();
-    title=id?'拠出記録を編集':'運営資金を拠出';const d=record||{};
-    fields=selectField('資金を出した参加者','personId',optionsPeople(d.personId||state.people[0]?.id))+requiredMoneyField('金庫へ入れた金額（円）','amount',d.amount??1)+dateField(d.date)+noteField(d.note)+`<p class="field-helper">運営金庫に実際に渡した資金だけを登録します。拠出金は精算時に返金対象になります。</p>`;
-  } else if(kind==='transfer'){
-    if(!state.people.length)return needPerson();
-    const t=record||pre;
-    title=id?'送金記録を編集':'実際の送金を記録';
-    fields=selectField('支払った側','from',optionsPeople(t.from??FUND,true))+selectField('受け取った側','to',optionsPeople(t.to??state.people[0].id,true))+requiredMoneyField('実際に渡した金額（円）','amount',t.amount??1)+dateField(t.date)+noteField(t.note)+`<p class="field-helper">ここでの記録は、実際に支払い済みの場合だけ追加します。現金や振込を実行する機能はありません。</p>`;
-  } else if(kind==='budget'){
-    title='イベント・売上の設定';
-    fields=inputField('イベント名','eventName','text',state.eventName,'maxlength="80"')+moneyField('売上総額（円）','sales',state.sales)+moneyField('留保金（円）','reserve',state.reserve)+`<p class="field-helper">売上は、会計担当が把握している総額を入力します。細かな商品別売上は記録しません。</p>`;
-  } else if(kind==='rates'){
-    title='ポイント単価を変更';
-    fields=TYPES.map(t=>inputField(`${t.label}（pt / 回）`,t.id,'number',state.rates[t.id],'min="0" max="100000" step="any" inputmode="decimal"')).join('')+`<p class="field-helper">変更は新しい記録から適用されます。既存の貢献ポイントは再計算しません。</p>`;
+function setupView(){setSync('初期設定が必要',true);$('#view').innerHTML=`<div class="auth-wrap">${heading('Supabase接続設定が必要です','公開済みのGitHub Pagesに共有データベースを接続します。')}${panel('初期設定','<p>Supabaseで新規プロジェクトを作成し、付属の <code>supabase/setup.sql</code> を実行してください。その後、<code>config.js</code> に Project URL と publishable（または anon）キーを設定してGitHubへ再アップロードします。</p><p class="warning-box">service_role キー、secret key、データベースのパスワードは絶対に入力・公開しないでください。</p>')}</div>`;}
+function landingView(){setSync(user?'ログイン済み':'参加待ち');const members=memberships.length?panel('参加済みのイベント',`<div class="profile-list">${memberships.map(m=>`<div class="person-summary-row"><div><strong>${esc(m.events?.event_name||'イベント')}</strong><small>${esc(m.display_name)} / ${m.role==='admin'?'管理者':'参加者'}</small></div>${button('開く','choose-event','soft',`data-id="${esc(m.event_id)}"`)}</div>`).join('')}</div>`):'';
+ const modeTitle={join:'招待コードで参加',create:'新しい出店を作成',recover:'管理者権限を復旧'};
+ const codes=authMode==='create'?field('出店名','eventName','text','学祭の出店','maxlength="80"')+field('自分の表示名','displayName','text','','maxlength="40" placeholder="例：佐藤"'):authMode==='recover'?field('自分の表示名','displayName','text','','maxlength="40"')+field('管理者復旧キー（32文字）','adminCode','text','','maxlength="32" minlength="32" autocapitalize="none" spellcheck="false"'):field('自分の表示名','displayName','text','','maxlength="40"')+field('招待コード（32文字）','inviteCode','text','','maxlength="32" minlength="32" autocapitalize="none" spellcheck="false"');
+ $('#view').innerHTML=`<div class="auth-wrap">${heading('学祭精算に参加','この出店の参加者は共通データを閲覧し、各自の貢献・立替を記録できます。')}${members}<div class="auth-grid"><section class="panel auth-panel"><h2>${modeTitle[authMode]}</h2><p>${authMode==='join'?'管理者から受け取った招待コードで参加できます。':authMode==='create'?'最初にイベントを作成した人が管理者になります。':'ブラウザを変更した管理者向け。管理者復旧キーが必要です。'}</p><form id="auth-form" class="compact-form">${codes}<button class="btn btn-primary" type="submit" ${busy?'disabled':''}>${authMode==='join'?'参加する':authMode==='create'?'作成する':'復旧する'}</button></form><div class="auth-alt"><button type="button" data-auth="join">参加</button><button type="button" data-auth="create">新規作成</button><button type="button" data-auth="recover">管理者復旧</button></div></section><section class="panel auth-panel"><h2>共有と承認について</h2><p>一般参加者の入力は「承認待ち」になります。管理者が承認した記録だけを精算に反映します。</p><div class="notice-box">・メールアドレス不要<br>・参加者ごとに記録の提出者を区別<br>・他人の申請は変更不可<br>・各端末から最新の精算結果を表示</div><p class="warning-box">匿名IDはこのブラウザに紐付きます。ブラウザのデータ削除・ログアウトで本人IDに戻れません。管理者は復旧キーを必ず別の安全な場所に保管してください。</p></section></div></div>`;
+}
+async function ensureUser(){if(user)return user;const {data,error}=await client.auth.signInAnonymously();if(error)throw error;user=data.user;return user;}
+async function authSubmit(e){e.preventDefault();if(busy)return;const fd=new FormData(e.currentTarget);busy=true;render();try{
+  const displayName=String(fd.get('displayName')||'').trim();if(!displayName||displayName.length>40)throw Error('表示名を入力してください。');
+  await ensureUser();let id;
+  if(authMode==='create'){
+    const name=String(fd.get('eventName')||'').trim();if(!name||name.length>80)throw Error('出店名を入力してください。');
+    const invite=code(),admin=code();id=check(await client.rpc('create_event',{p_event_name:name,p_display_name:displayName,p_invite_code:invite,p_admin_code:admin}));
+    eventId=id;cacheCode('invite',invite);cacheCode('admin',admin);
+    alert(`新規イベントを作成しました。\n\n招待コード：${invite}\n\n管理者復旧キー：${admin}\n\n管理者復旧キーはこの画面を閉じる前に安全な場所へ保管してください。参加者に渡すのは招待コードだけです。`);
+  }else if(authMode==='join'){
+    const invite=String(fd.get('inviteCode')||'').trim().toLowerCase();id=check(await client.rpc('join_event',{p_invite_code:invite,p_display_name:displayName}));
+  }else{
+    const admin=String(fd.get('adminCode')||'').trim().toLowerCase();id=check(await client.rpc('recover_admin',{p_admin_code:admin,p_display_name:displayName}));
   }
-  $('#dialog-title').textContent=title;
-  $('#dialog-fields').innerHTML=fields;
-  $('#edit-dialog').showModal();
-}
-function needPerson(){notice('参加者を先に登録してください');openForm('person');}
-function readNumber(fd,key,{positive=false,integer=false}={}){
-  const n=Number(fd.get(key));
-  if(!Number.isFinite(n)||n<0||(positive&&n===0)||(integer&&!Number.isSafeInteger(n))||n>999999999)throw Error(`${key} に正しい値を入力してください。`);
-  return n;
-}
-function getValue(fd,key){return String(fd.get(key)||'').trim();}
-function finishForm(e){
-  e.preventDefault();
-  const {kind,id}=editing||{};const fd=new FormData(e.currentTarget); let changed=false;
-  try {
-    if(kind==='budget'){
-      const eventName=getValue(fd,'eventName');if(!eventName)throw Error('イベント名を入力してください。');
-      const sales=readNumber(fd,'sales',{integer:true}); const reserve=readNumber(fd,'reserve',{integer:true});
-      mutate(()=>{state.eventName=eventName;state.sales=sales;state.reserve=reserve;});changed=true;
-    } else if(kind==='rates'){
-      const rates={};for(const t of TYPES)rates[t.id]=readNumber(fd,t.id);
-      mutate(()=>{state.rates=rates;});changed=true;
-    } else {
-      let record={id:id||uid()};
-      if(kind==='person'){
-        record.name=getValue(fd,'name');if(!record.name)throw Error('名前を入力してください。');
-      } else if(kind==='activity'){
-        record={...record,personId:getValue(fd,'personId'),type:getValue(fd,'type'),quantity:readNumber(fd,'quantity',{positive:true}),rate:readNumber(fd,'rate'),date:getValue(fd,'date'),note:getValue(fd,'note')};
-      } else if(kind==='expense'){
-        record={...record,title:getValue(fd,'title'),paidBy:getValue(fd,'paidBy'),amount:readNumber(fd,'amount',{integer:true,positive:true}),date:getValue(fd,'date'),note:getValue(fd,'note')};
-        if(!record.title)throw Error('支出の内容を入力してください。');
-      } else if(kind==='deposit'){
-        record={...record,personId:getValue(fd,'personId'),amount:readNumber(fd,'amount',{integer:true,positive:true}),date:getValue(fd,'date'),note:getValue(fd,'note')};
-      } else if(kind==='transfer'){
-        record={...record,from:getValue(fd,'from'),to:getValue(fd,'to'),amount:readNumber(fd,'amount',{integer:true,positive:true}),date:getValue(fd,'date'),note:getValue(fd,'note')};
-        if(record.from===record.to)throw Error('支払う人と受け取る人は別にしてください。');
-      }
-      const collection={person:'people',activity:'activities',expense:'expenses',deposit:'deposits',transfer:'transfers'}[kind];
-      if(!collection)throw Error('不明な操作です。');
-      mutate(()=>{if(id){const i=state[collection].findIndex(x=>x.id===id);if(i>=0)state[collection][i]=record;}else state[collection].push(record);});changed=true;
-    }
-  } catch(err) {alert(err.message);}
-  if(changed){$('#edit-dialog').close();notice('保存しました');}
-}
-function remove(kind,id){
-  const collection={person:'people',activity:'activities',expense:'expenses',deposit:'deposits',transfer:'transfers'}[kind];
-  if(!collection)return;
-  const x=state[collection].find(row=>row.id===id);if(!x)return;
-  if(kind==='person'){
-    const referenced = state.activities.some(a=>a.personId===id)||state.expenses.some(e=>e.paidBy===id)||state.deposits.some(d=>d.personId===id)||state.transfers.some(t=>t.from===id||t.to===id);
-    if(referenced)return alert('この参加者には記録が紐付いています。関連する記録を削除・編集してから削除してください。');
+  eventId=id;localStorage.setItem(localKey,id);await refreshAll(true);notice('参加しました');
+ }catch(err){showError(err);}
+ finally{busy=false;render();}}
+async function refreshMemberships(){const rows=check(await client.from('event_members').select('event_id,user_id,display_name,role,events(event_name)').eq('user_id',user.id).order('joined_at',{ascending:true}));memberships=rows||[];}
+function detachChannel(){if(channel&&client){client.removeChannel(channel);channel=null;}}
+function subscribe(){detachChannel();if(!eventId)return;channel=client.channel('settlement-'+eventId);for(const table of ['events','event_members','activities','expenses','deposits','transfers']){
+    const filter=table==='events'?`id=eq.${eventId}`:`event_id=eq.${eventId}`;
+    channel.on('postgres_changes',{event:'*',schema:'public',table,filter},()=>{if(!$('#edit-dialog').open&&!busy)refreshData().catch(e=>console.warn(e));});
   }
-  if(!confirm('この記録を削除しますか？'))return;
-  mutate(()=>state[collection]=state[collection].filter(row=>row.id!==id));notice('削除しました');
+  channel.subscribe((status)=>{if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')setSync('同期再接続中',true);});
 }
-function download(name,text,contentType){
-  const blob=new Blob([text],{type:contentType});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+async function refreshAll(sub=false){if(!client||!user)return;await refreshMemberships();if(eventId&&!memberships.some(m=>m.event_id===eventId))eventId=null;
+  if(!eventId){const saved=localStorage.getItem(localKey);if(saved&&memberships.some(m=>m.event_id===saved))eventId=saved;else if(memberships.length===1)eventId=memberships[0].event_id;}
+  if(eventId){localStorage.setItem(localKey,eventId);await refreshData();if(sub)subscribe();}else{currentEvent=null;people=[];detachChannel();render();}
 }
-function backup(){download(`gakusai-backup-${dateToday()}.json`,JSON.stringify(state,null,2),'application/json;charset=utf-8');notice('バックアップを出力しました');}
-function csvField(value){let s=String(value??''); if (/^\s*[=+@\-]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';}
-function csv(rows){return '\ufeff'+rows.map(row=>row.map(csvField).join(',')).join('\r\n');}
-function exportCsv(){
-  const c=calculate(state);
-  const rows=[['参加者','ポイント','利益配分（円）','立替（円）','拠出（円）','受取済（円）','支払済（円）','受取残額（円）'],...c.byPerson.map(p=>[p.name,p.points,p.share,p.paidExpenses,p.contributed,p.received,p.sent,p.balance])];
-  const log=[['種別','日付','人物/支払者','相手/種別','内容','金額（円）/ポイント','備考'],
-    ...state.activities.map(a=>['貢献',a.date,named(a.personId),typeName(a.type),'貢献',a.quantity*a.rate,a.note||'']),
-    ...state.expenses.map(e=>['経費',e.date,named(e.paidBy),'出店経費',e.title,e.amount,e.note||'']),
-    ...state.deposits.map(d=>['資金拠出',d.date,named(d.personId),'運営金庫','資金拠出',d.amount,d.note||'']),
-    ...state.transfers.map(t=>['送金',t.date,named(t.from),named(t.to),'実際の送金',t.amount,t.note||''])];
-  download(`gakusai-members-${dateToday()}.csv`,csv(rows),'text/csv;charset=utf-8');
-  download(`gakusai-records-${dateToday()}.csv`,csv(log),'text/csv;charset=utf-8');
-  notice('CSVを出力しました');
+async function refreshData(){if(!eventId)return;const eId=eventId;const qs=[client.from('events').select('id,event_name,sales,reserve,rates,created_at').eq('id',eId).single(),client.from('event_members').select('user_id,display_name,role,joined_at').eq('event_id',eId).order('joined_at',{ascending:true}),client.from('activities').select('*').eq('event_id',eId).order('created_at',{ascending:false}).limit(1000),client.from('expenses').select('*').eq('event_id',eId).order('created_at',{ascending:false}).limit(1000),client.from('deposits').select('*').eq('event_id',eId).order('created_at',{ascending:false}).limit(1000),client.from('transfers').select('*').eq('event_id',eId).order('created_at',{ascending:false}).limit(1000)];
+  const [evt,member,acts,exps,deps,trans]=await Promise.all(qs.map(q=>q));for(const r of [evt,member,acts,exps,deps,trans])check(r);if(eId!==eventId)return;
+  currentEvent=evt.data;
+  ({people,records,state}=normalizeCloud(currentEvent,member.data||[],acts.data||[],exps.data||[],deps.data||[],trans.data||[]));
+  lastLoadedAt=Date.now();setSync('共有データと同期中');render();
 }
-function loadDemo(){
-  if(!confirm('現在の全データをサンプルに置き換えます。よろしいですか？'))return;
-  const names=['佐藤','田中','鈴木','高橋'];const ids=names.map(()=>uid());const d=dateToday();
-  mutate(()=>{state={...defaultData(),eventName:'学祭 模擬店（サンプル）',sales:45000,reserve:5000,people:names.map((name,i)=>({id:ids[i],name})),
-    activities:[{id:uid(),personId:ids[0],type:'prep',quantity:3,rate:2,date:d,note:'看板・メニューの準備'},{id:uid(),personId:ids[1],type:'shopping',quantity:2,rate:3,date:d,note:'食材の買い出し'},{id:uid(),personId:ids[2],type:'car',quantity:2,rate:4,date:d,note:'荷物の運搬'},{id:uid(),personId:ids[3],type:'operation',quantity:4,rate:2,date:d,note:'当日の接客'}],
-    expenses:[{id:uid(),title:'食材・材料',amount:7200,paidBy:ids[1],date:d,note:''},{id:uid(),title:'容器・装飾',amount:3300,paidBy:FUND,date:d,note:''}],
-    deposits:[{id:uid(),personId:ids[0],amount:10000,date:d,note:'開店準備資金'}],transfers:[]};});
-  currentTab='dashboard';render();notice('サンプルデータを読み込みました');
-}
-function resetData(){if(!confirm('参加者・支出・送金などの全データを消去します。続けますか？'))return;if(!confirm('本当に初期化しますか？元に戻せません。'))return;mutate(()=>{state=defaultData();});currentTab='dashboard';render();notice('初期化しました');}
-function handleAction(e){
-  const tabButton=e.target.closest('[data-tab]'); if(tabButton){selectTab(tabButton.dataset.tab);return;}
-  const el=e.target.closest('[data-action]'); if(!el)return;
-  const {action,id}=el.dataset;
-  if(action==='close-dialog'){$('#edit-dialog').close();return;}
-  if(action.startsWith('add-'))return openForm(action.slice(4));
-  if(action.startsWith('edit-'))return openForm(action.slice(5),id);
-  if(action.startsWith('delete-'))return remove(action.slice(7),id);
-  switch(action){
-    case 'edit-budget':return openForm('budget');
-    case 'edit-rates':return openForm('rates');
-    case 'download-backup':return backup();
-    case 'import-backup':return $('#import-file').click();
-    case 'export-csv':return exportCsv();
-    case 'load-demo':return loadDemo();
-    case 'reset-data':return resetData();
-    case 'goto-money':return selectTab('money');
-    case 'record-suggestion':{
-      const amount=Number(el.dataset.amount);const from=el.dataset.from;const to=el.dataset.to;
-      const current=calculate(state).suggestions.some(s=>s.amount===amount&&s.from===from&&s.to===to);
-      if(!current)return notice('精算案が変更されました。画面を再読み込みしてください。');
-      if(!confirm(`${named(from)} → ${named(to)}：${yen(amount)}\n実際に支払いが完了しましたか？`))return;
-      mutate(()=>state.transfers.push({id:uid(),from,to,amount,date:dateToday(),note:'自動精算案から記録'}));notice('支払い済みとして記録しました');return;
-    }
+function personList(selected,{includeFund=false,onlyMine=false}={}){const persons=onlyMine?people.filter(p=>p.id===user?.id):people;return `${includeFund?`<option value="fund" ${selected===FUND?'selected':''}>運営金庫</option>`:''}${persons.map(p=>`<option value="${esc(p.id)}" ${p.id===selected?'selected':''}>${esc(p.name)}</option>`).join('')}`;}
+function row(title,sub,right,status=null){return `<div class="entry-row"><div class="entry-main"><strong>${esc(title)}</strong>${status?statusHtml(status):''}<small>${esc(sub)}</small></div><div class="entry-right"><strong>${right}</strong></div></div>`;}
+function profileList(c){return c.byPerson.map(p=>`<div class="person-summary-row"><div class="person-ident"><span class="avatar">${esc(p.name.slice(0,1))}</span><div><strong>${esc(p.name)} ${p.id===user?.id?'<span class="badge-small">（自分）</span>':''}</strong><small>${points(p.points)} pt / 利益配分 ${yen(p.share)}</small></div></div><span class="amount ${p.balance<0?'negative':''}">${p.balance<0?'支払 '+yen(p.balance):'受取 '+yen(p.balance)}</span></div>`).join('');}
+function dashboardView(c){return `${heading(esc(state.eventName),'承認済みの記録を使って、利益分配と精算額を計算しています。',isAdmin()?button('売上を編集','edit-budget','primary'):'')}
+ ${reviewCount()?`<div class="alert alert-warn">承認待ちの申請が ${reviewCount()} 件あります。未承認の金額・ポイントは精算に含みません。${isAdmin()?button('承認する','goto-reviews','soft'):''}</div>`:''}
+ ${c.blocked?`<div class="alert alert-warn">${esc(c.blocked)}</div>`:''}
+ <div class="metric-grid">${metric('売上総額',yen(c.sales),'管理者が入力')}${metric('承認済み経費',yen(c.expensesTotal),'立替を含む')}${metric('分配対象利益',signedYen(c.net),'売上 − 経費 − 留保金')}${metric('貢献ポイント',points(c.totalPoints)+' pt',people.length+'人の参加者')}</div>
+ <div class="content-grid">
+ ${panel('参加者別の受取・支払残額',profileList(c)||'<p>参加者はいません。</p>')}
+ ${panel('精算状況',`<div class="settlement-facts"><div><span>運営金庫の残高</span><strong>${signedYen(c.fundCash)}</strong></div><div><span>留保金</span><strong>${yen(c.reserve)}</strong></div><div><span>金庫の精算可能額</span><strong>${signedYen(c.fundAvailable)}</strong></div><div><span>送金候補</span><strong>${c.blocked?'—':c.suggestions.length+'件'}</strong></div></div>${button('精算の内訳を見る','goto-money','soft')}`)}
+ ${panel('記録を追加',`<div class="quick-actions">${button('貢献を記録','add-activity','light')}${button('立替を申請','add-expense','light')}${button('資金拠出を記録','add-deposit','light')}${isAdmin()?button('送金を記録','add-transfer','light'):''}</div><p class="hint">買い出しの作業ポイントと、材料費の立替金は別々に登録します。</p>`)}
+ ${panel('最近の申請',`<div class="row-list">${[...records.activities.map(x=>({...x,kind:'貢献',title:named(x.personId)+' / '+typeLabel(x.type),display:points(x.quantity*x.rate)+'pt'})),...records.expenses.map(x=>({...x,kind:'経費',display:yen(x.amount)})),...records.deposits.map(x=>({...x,kind:'拠出',title:named(x.personId),display:yen(x.amount)}))].sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,6).map(x=>row(x.title||x.kind,`${dateLabel(x.date)} / ${x.kind}`,esc(x.display),x.status)).join('')||'<p>申請はまだありません。</p>'}</div>`)}
+ </div>`;}
+function activitiesView(c){const max=Math.max(1,...c.byPerson.map(p=>p.points));const activityRows=byDate(records.activities).map(a=>row(named(a.personId)+' / '+typeLabel(a.type),`${dateLabel(a.date)}${a.note?' ・ '+a.note:''} / ${points(a.quantity)}回 × ${points(a.rate)}pt`,points(a.quantity*a.rate)+'pt',a.status)).join('');return `${heading('貢献記録','参加者が作業を申請し、管理者が承認するとポイントに反映されます。',button('貢献を追加','add-activity','primary'))}<div class="content-grid">
+ ${panel('承認済みポイント',c.byPerson.map(p=>`<div class="point-row"><div class="point-row-head"><strong>${esc(p.name)}</strong><span>${points(p.points)}pt</span></div><div class="progress"><div data-percent="${p.points/max*100}"></div></div></div>`).join('')||'参加者がいません。')}
+ ${panel('作業ごとのポイント',`<div class="rate-list">${TYPES.map(t=>`<div><span>${t.label}</span><strong>${points(state.rates[t.id])}pt / 回</strong></div>`).join('')}</div><p class="hint">登録時に適用された単価は、その後の設定変更では変わりません。</p>`)}
+ </div><section class="panel panel-full"><div class="panel-heading"><h2>記録履歴</h2><span class="muted">${records.activities.length}件</span></div>${activityRows||'<p>記録はまだありません。</p>'}</section>`;}
+function expensesView(c){return `${heading('立替・経費','実際に支払った人と金額を申請します。自分の支出は承認後に返金対象になります。',button('立替を申請','add-expense','primary'))}<div class="metric-grid three">${metric('承認済み経費',yen(c.expensesTotal))}${metric('参加者の立替',yen(c.personalExpenses))}${metric('金庫払い',yen(c.fundExpenses))}</div><section class="panel panel-full"><div class="panel-heading"><h2>支出一覧</h2><span class="muted">${records.expenses.length}件</span></div>${byDate(records.expenses).map(x=>row(x.title,`${dateLabel(x.date)} / ${named(x.paidBy)}が支払${x.note?' / '+x.note:''}`,yen(x.amount),x.status)).join('')||'<p>経費の記録はありません。</p>'}</section>`;}
+function moneyView(c){const suggestionRows=c.suggestions.map(s=>`<div class="settlement-row"><div class="settlement-description"><strong>${esc(s.fromName)} → ${esc(s.toName)}</strong><small>未精算額（試算）</small></div><strong class="settlement-sum">${yen(s.amount)}</strong>${isAdmin()?button('支払済みを記録','pay-suggestion','soft',`data-from="${esc(s.from)}" data-to="${esc(s.to)}" data-amount="${s.amount}"`):''}</div>`).join('');return `${heading('資金・精算','運営資金の拠出、送金履歴、参加者への分配額を確認します。',isAdmin()?button('送金を記録','add-transfer','primary'):'')}
+ <div class="metric-grid three">${metric('運営金庫残高',signedYen(c.fundCash))}${metric('留保金',yen(c.reserve))}${metric('金庫の精算可能額',signedYen(c.fundAvailable))}</div>
+ ${panel('自動精算案',`<p class="section-help">承認済みの記録だけを使った試算です。実際の振込・現金移動は行いません。</p>${c.blocked?`<div class="alert alert-warn">${esc(c.blocked)}</div>`:suggestionRows||'<p>送金候補はありません。</p>'}<p class="hint">複数人が入力中の場合、支払前に最新情報を確認してください。二重支払いを防ぐため、送金登録は管理者のみです。</p>`)}
+ <section class="panel panel-full"><div class="panel-heading"><h2>参加者別の精算内訳</h2></div><div class="table-scroll"><table><thead><tr><th>参加者</th><th>利益配分</th><th>立替</th><th>資金拠出</th><th>受取済−支払済</th><th>残額</th></tr></thead><tbody>${c.byPerson.map(p=>`<tr><td>${esc(p.name)}<small>${points(p.points)}pt</small></td><td class="num">${yen(p.share)}</td><td class="num">${yen(p.paidExpenses)}</td><td class="num">${yen(p.contributed)}</td><td class="num">${signedYen(p.received-p.sent)}</td><td class="num bold">${signedYen(p.balance)}</td></tr>`).join('')||'<tr><td colspan="6">参加者なし</td></tr>'}</tbody></table></div></section>
+ <div class="content-grid">${panel('運営資金の拠出',`<p class="section-help">出店前に金庫へ渡した資金。立替とは別で返金対象です。</p>${button('拠出を追加','add-deposit','light')}<div class="row-list">${byDate(records.deposits).map(x=>row(named(x.personId),`${dateLabel(x.date)}${x.note?' / '+x.note:''}`,yen(x.amount),x.status)).join('')||'<p>拠出記録なし</p>'}</div>`)}
+ ${panel('実際の支払い・送金履歴',`<p class="section-help">管理者が登録した支払済み履歴。修正は反対方向の送金記録で相殺します。</p>${byDate(records.transfers).map(x=>row(named(x.from)+' → '+named(x.to),`${dateLabel(x.date)}${x.note?' / '+x.note:''}`,yen(x.amount))).join('')||'<p>まだ送金されていません。</p>'}`)}</div>`;}
+function reviewsView(){if(!isAdmin())return heading('承認待ち','管理者だけが閲覧できます。');const pendingRows=[];for(const t of ['activities','expenses','deposits'])for(const x of records[t].filter(x=>x.status==='pending')){
+ const description=t==='activities'?`${named(x.personId)} / ${typeLabel(x.type)} / ${points(x.quantity*x.rate)}pt`:t==='expenses'?`${x.title} / ${named(x.paidBy)} / ${yen(x.amount)}`:`${named(x.personId)} / ${yen(x.amount)}`;
+ pendingRows.push({t,x,description});
+ }pendingRows.sort((a,b)=>b.x.created_at.localeCompare(a.x.created_at));return `${heading('承認待ち','内容を確認し、承認した記録だけを精算に反映します。')}${panel('申請一覧',pendingRows.length?`<div class="review-stack">${pendingRows.map(({t,x,description})=>`<div class="review-item"><div><strong>${esc(description)}</strong><small>${dateLabel(x.date)} / 申請者：${esc(named(x.created_by))}${x.note?' / '+esc(x.note):''}</small></div><div class="review-buttons">${button('承認','review','primary',`data-table="${t}" data-id="${esc(x.id)}" data-status="approved"`)}${button('却下','review','danger',`data-table="${t}" data-id="${esc(x.id)}" data-status="rejected"`)}</div></div>`).join('')}</div>`:'<p>承認待ちの申請はありません。</p>')}
+ ${panel('承認済み・却下済みの変更',`<p class="section-help">訂正が必要なときは、管理者が承認状態を変更できます。作業内容や金額自体は書き換えず、再申請します。</p><div class="review-stack">${['activities','expenses','deposits'].flatMap(t=>records[t].filter(x=>x.status!=='pending').map(x=>({t,x}))).sort((a,b)=>b.x.created_at.localeCompare(a.x.created_at)).slice(0,60).map(({t,x})=>`<div class="review-item"><div><strong>${t==='activities'?esc(named(x.personId)+' / '+typeLabel(x.type)+' '+points(x.quantity*x.rate)+'pt'):t==='expenses'?esc(x.title+' / '+yen(x.amount)):esc(named(x.personId)+' / '+yen(x.amount))} ${statusHtml(x.status)}</strong><small>${dateLabel(x.date)}</small></div><div class="review-buttons">${button(x.status==='approved'?'承認を取り消す':'承認する','review','light',`data-table="${t}" data-id="${esc(x.id)}" data-status="${x.status==='approved'?'rejected':'approved'}"`)}</div></div>`).join('')||'履歴はありません。'}</div>`)}`;}
+function settingsView(){let inv=promptCode('invite'),adm=promptCode('admin');return `${heading('参加者・設定','管理者の精算ルールと、共有用の招待コードを管理します。')}
+ <div class="content-grid">${panel('参加者',`<div class="shared-people">${people.map(p=>`<div class="person-summary-row"><div class="person-ident"><span class="avatar">${esc(p.name.slice(0,1))}</span><strong>${esc(p.name)}</strong></div><span class="member-pill">${p.role==='admin'?'管理者':'参加者'}${p.id===user?.id?' / 自分':''}</span></div>`).join('')}</div><div class="button-stack">${button('自分の表示名を変更','rename-me','light')}</div>`)}
+ ${panel('出店情報',`<div class="rate-list"><div><span>出店名</span><strong>${esc(state.eventName)}</strong></div><div><span>売上総額</span><strong>${yen(state.sales)}</strong></div><div><span>留保金</span><strong>${yen(state.reserve)}</strong></div></div>${isAdmin()?button('編集','edit-budget','soft'):'<p class="hint">管理者のみ編集できます。</p>'}`)}
+ ${panel('ポイント配点',`<div class="rate-list">${TYPES.map(t=>`<div><span>${t.label}</span><strong>${points(state.rates[t.id])}pt</strong></div>`).join('')}</div>${isAdmin()?button('配点を変更','edit-rates','soft'):''}<p class="hint">配点変更後の申請にのみ適用され、過去分は変更されません。</p>`)}
+ ${panel('招待と管理者復旧',`<p class="section-help">参加者には招待コードだけを渡してください。管理者復旧キーは絶対に参加者へ渡さないでください。</p>${isAdmin()?`<small>参加者用招待コード（現在の端末に保存されている場合だけ表示）</small>${inv?`<div class="inline-secrets"><code class="invite-code">${esc(inv)}</code>${button('コピー','copy-invite','light')}</div>`:'<p>この端末に元のコードはありません。再生成すると以前のコードは無効になります。</p>'}<div class="button-stack">${button('招待コードを再生成','rotate-invite','light')}</div><hr class="secret-divider"><small>管理者復旧キー（別端末で管理者に戻るために使用）</small>${adm?`<div class="inline-secrets"><code class="invite-code">${esc(adm)}</code>${button('コピー','copy-admin','light')}</div>`:'<p>復旧キーは端末に保存されていません。再生成できます。</p>'}<div class="button-stack">${button('管理者復旧キーを再生成','rotate-admin','light')}</div>`:'<p>管理者に招待コードを問い合わせてください。</p>'}`)}
+ ${panel('データ出力・更新',`<div class="button-stack">${button('JSONバックアップ','export-json','light')}${button('CSV（精算）','export-csv','light')}${button('最新版を取得','reload','light')}</div><p class="hint">データはSupabaseに保存されます。JSONバックアップは閲覧・保管用で、v2では復元機能をまだ提供していません。GitHubに個人データをアップロードしないでください。</p>`)}
+ ${panel('参加している出店',`<div class="event-switch"><label class="field"><span>切替先</span><select id="event-choice">${memberships.map(m=>`<option value="${esc(m.event_id)}" ${m.event_id===eventId?'selected':''}>${esc(m.events?.event_name||'イベント')}（${m.role==='admin'?'管理者':'参加者'}）</option>`).join('')}</select></label></div>${button('別の出店に参加・作成','back-landing','light')}<p class="hint">端末内の利用者IDを保持したまま切り替えます。匿名IDのため、ブラウザのデータは削除しないでください。</p>`)}</div>`;}
+function openForm(kind,pre={}){if(!eventId)return;if(['budget','rates','transfer'].includes(kind)&&!isAdmin())return notice('管理者だけが操作できます');let title='',fields='';const admin=isAdmin();const personalId=user.id;
+ if(kind==='activity'){title='貢献を追加';fields=select('作業した人','personId',personList(personalId,{onlyMine:!admin}))+select('作業の種類','type',TYPES.map(t=>`<option value="${t.id}">${t.label}</option>`).join(''))+field('回数・量','quantity','number',1,'min="0.01" max="100000" step="0.01" inputmode="decimal"')+field('日付','date','date',day())+notes()+'<p class="hint">ポイント単価はサーバーで自動設定されます。一般参加者は管理者の承認後に反映されます。</p>';
+ }else if(kind==='expense'){title=admin?'立替・経費を記録':'自分の立替を申請';fields=field('支出の内容','title','text','','maxlength="100" placeholder="例：食材・材料"')+money('金額（円）','amount')+select('実際に支払った人','paidBy',personList(admin?FUND:personalId,{includeFund:admin,onlyMine:!admin}))+field('日付','date','date',day())+notes();
+ }else if(kind==='deposit'){title='運営資金の拠出を記録';fields=select('資金を出した人','personId',personList(personalId,{onlyMine:!admin}))+money('渡した金額（円）','amount')+field('日付','date','date',day())+notes()+'<p class="hint">実際に金庫へ渡した資金だけ記録してください。</p>';
+ }else if(kind==='transfer'){title='実際の送金を記録';fields=select('支払った側','from',personList(pre.from||FUND,{includeFund:true}))+select('受け取った側','to',personList(pre.to||people[0]?.id,{includeFund:true}))+money('支払い済み金額（円）','amount',pre.amount||'1')+field('日付','date','date',day())+notes()+'<p class="hint">ここでは現金や振込の実行はしません。支払いが完了した場合だけ記録してください。記録は削除できません。</p>';
+ }else if(kind==='budget'){title='イベント情報';fields=field('出店名','eventName','text',state.eventName,'maxlength="80"')+money('売上総額（円）','sales',state.sales,true)+money('留保金（円）','reserve',state.reserve,true);
+ }else if(kind==='rates'){title='貢献ポイントの配点';fields=TYPES.map(t=>field(t.label+'（pt / 回）',t.id,'number',state.rates[t.id],'min="0" max="100000" step="0.01" inputmode="decimal"')).join('');
+ }else if(kind==='rename'){title='自分の表示名を変更';fields=field('表示名','name','text',me()?.name||'','maxlength="40"');}else return;
+ $('#edit-dialog').dataset.kind=kind;$('#dialog-title').textContent=title;$('#dialog-fields').innerHTML=fields;$('#edit-dialog').showModal();}
+function number(fd,key,{integer=false,positive=false}={}){const raw=String(fd.get(key)??'').trim();if(!raw)throw Error(`${key}を入力してください。`);const n=Number(raw);if(!Number.isFinite(n)||n<0||n>999999999||(positive&&n<=0)||(integer&&!Number.isSafeInteger(n)))throw Error(`${key} の数値が正しくありません。`);return n;}
+function textVal(fd,key){return String(fd.get(key)||'').trim();}
+async function formSubmit(e){e.preventDefault();if(busy)return;const kind=$('#edit-dialog').dataset.kind;const fd=new FormData(e.currentTarget);const admin=isAdmin();busy=true;$('#submit-button').disabled=true;
+ try{let table,payload;
+  if(kind==='budget'){const name=textVal(fd,'eventName');if(!name)throw Error('出店名を入力してください');check(await client.from('events').update({event_name:name,sales:number(fd,'sales',{integer:true}),reserve:number(fd,'reserve',{integer:true})}).eq('id',eventId));}
+  else if(kind==='rates'){const rates={};for(const t of TYPES){rates[t.id]=number(fd,t.id);if(Math.abs(rates[t.id]*100-Math.round(rates[t.id]*100))>1e-7)throw Error('ポイントは小数第2位まで');}check(await client.from('events').update({rates}).eq('id',eventId));}
+  else if(kind==='rename'){check(await client.rpc('rename_me',{p_event_id:eventId,p_display_name:textVal(fd,'name')}));}
+  else{
+   const common={event_id:eventId,record_date:textVal(fd,'date'),note:textVal(fd,'note')};
+   if(kind==='activity'){table='activities';payload={...common,person_id:admin?textVal(fd,'personId'):user.id,type:textVal(fd,'type'),quantity:number(fd,'quantity',{positive:true}),status:admin?'approved':'pending'};delete payload.rate;}
+   if(kind==='expense'){table='expenses';const paidBy=admin?textVal(fd,'paidBy'):user.id;payload={...common,title:textVal(fd,'title'),paid_by:paidBy===FUND?null:paidBy,amount:number(fd,'amount',{integer:true,positive:true}),status:admin?'approved':'pending'};if(!payload.title)throw Error('支出の内容を入力してください。');}
+   if(kind==='deposit'){table='deposits';payload={...common,person_id:admin?textVal(fd,'personId'):user.id,amount:number(fd,'amount',{integer:true,positive:true}),status:admin?'approved':'pending'};}
+   if(kind==='transfer'){table='transfers';const from=textVal(fd,'from'),to=textVal(fd,'to');if(from===to)throw Error('支払う側と受け取る側が同じです。');payload={...common,from_user:from===FUND?null:from,to_user:to===FUND?null:to,amount:number(fd,'amount',{integer:true,positive:true})};if(!confirm(`${named(from)} → ${named(to)} に ${yen(payload.amount)}\n実際に送金・手渡しが完了していますか？`))return;}
+   if(!table)throw Error('不明な記録です。');check(await client.from(table).insert(payload));
   }
+  $('#edit-dialog').close();await refreshAll();notice(admin?'保存しました':'申請を保存しました（承認待ち）');
+ }catch(err){showError(err);}finally{busy=false;$('#submit-button').disabled=false;}}
+async function review(table,id,status){if(!isAdmin()||!['activities','expenses','deposits'].includes(table)||!['approved','rejected'].includes(status))return;
+ if(!confirm(status==='approved'?'この記録を承認して精算に反映しますか？':'この記録の承認を取り消し、精算から除外しますか？'))return;
+ try{const result=check(await client.from(table).update({status}).eq('event_id',eventId).eq('id',id).select('id'));if(!result?.length)throw Error('記録が更新できませんでした。別の端末ですでに処理されている可能性があります。');await refreshAll();notice(status==='approved'?'承認しました':'承認を取り消しました');}catch(err){showError(err);}}
+async function saveSuggestion(el){if(!isAdmin())return;const from=el.dataset.from,to=el.dataset.to,amount=Number(el.dataset.amount);try{await refreshAll();const c=calculate(state);if(!c.suggestions.some(x=>x.from===from&&x.to===to&&x.amount===amount))throw Error('金額が変更されました。精算案をもう一度確認してください。');if(!confirm(`${named(from)} → ${named(to)}：${yen(amount)}\n支払いが実際に完了した場合だけ「OK」を押してください。`))return;check(await client.from('transfers').insert({event_id:eventId,from_user:from===FUND?null:from,to_user:to===FUND?null:to,amount,record_date:day(),note:'自動精算案から記録'}));await refreshAll();notice('送金記録を追加しました');}catch(err){showError(err);}}
+async function rotateKey(kind){if(!isAdmin())return;const isAdminKey=kind==='admin';if(!confirm(`${isAdminKey?'管理者復旧キー':'参加者用招待コード'}を変更しますか？以前のコードは使えなくなります。`))return;try{const secret=code();const fn=isAdminKey?'rotate_admin_code':'rotate_invite_code',param=isAdminKey?'p_admin_code':'p_invite_code';check(await client.rpc(fn,{p_event_id:eventId,[param]:secret}));cacheCode(isAdminKey?'admin':'invite',secret);render();alert(`${isAdminKey?'管理者復旧キー':'招待コード'}：\n${secret}\n\n安全な場所に保存してください。`);}catch(err){showError(err);}}
+async function refreshClick(){try{if(user){await refreshAll(true);notice('最新のデータを取得しました');}else render();}catch(err){showError(err);}}
+async function handleClick(e){const auth=e.target.closest('[data-auth]');if(auth){authMode=auth.dataset.auth;render();return;}
+ const nav=e.target.closest('[data-tab]');if(nav){tab=nav.dataset.tab;render();window.scrollTo(0,0);return;}
+ const target=e.target.closest('[data-action]');if(!target)return;const action=target.dataset.action;
+ if(action==='close-dialog'){ $('#edit-dialog').close();return; }
+ if(action==='reload'){await refreshClick();return;}
+ if(action==='choose-event'){eventId=target.dataset.id;localStorage.setItem(localKey,eventId);await refreshAll(true);tab='dashboard';render();return;}
+ if(action==='back-landing'){eventId=null;currentEvent=null;detachChannel();render();return;}
+ if(action==='goto-money'){tab='money';render();return;}
+ if(action==='goto-reviews'){tab='reviews';render();return;}
+ if(action.startsWith('add-')){openForm(action.slice(4));return;}
+ if(action==='edit-budget'){openForm('budget');return;}
+ if(action==='edit-rates'){openForm('rates');return;}
+ if(action==='rename-me'){openForm('rename');return;}
+ if(action==='review'){await review(target.dataset.table,target.dataset.id,target.dataset.status);return;}
+ if(action==='pay-suggestion'){await saveSuggestion(target);return;}
+ if(action==='rotate-invite'){await rotateKey('invite');return;}
+ if(action==='rotate-admin'){await rotateKey('admin');return;}
+ if(action==='copy-invite'||action==='copy-admin'){const value=promptCode(action==='copy-invite'?'invite':'admin');try{await navigator.clipboard.writeText(value);notice('コピーしました');}catch{prompt('このコードをコピーしてください',value);}return;}
+ if(action==='export-json'){const backup={format:'gakusai-v2-view-only',exportedAt:new Date().toISOString(),event:currentEvent,people,activities:records.activities,expenses:records.expenses,deposits:records.deposits,transfers:records.transfers};download(`gakusai-v2-backup-${day()}.json`,JSON.stringify(backup,null,2),'application/json');notice('バックアップを保存しました');return;}
+ if(action==='export-csv'){const c=calculate(state);const rows=[['参加者','ポイント','利益配分','経費立替','出資返金','受取済','支払済','受取残額'],...c.byPerson.map(p=>[p.name,p.points,p.share,p.paidExpenses,p.contributed,p.received,p.sent,p.balance])];download(`gakusai-v2-settlement-${day()}.csv`,writeCSV(rows),'text/csv');notice('CSVを出力しました');return;}
 }
-$('#import-file').addEventListener('change',async e=>{
-  const file=e.target.files?.[0];e.target.value='';if(!file)return;
-  try{const incoming=validateImport(JSON.parse(await file.text()));if(!confirm('現在の記録をすべて上書きして復元します。よろしいですか？'))return;state=incoming;save();currentTab='dashboard';render();notice('バックアップを復元しました');}catch(err){alert(`復元に失敗しました：${err.message}`);}
-});
-$('#edit-form').addEventListener('submit',finishForm);
-$('#dialog-fields').addEventListener('change',e=>{
-  if(e.target.name!=='type'||editing?.kind!=='activity')return;
-  const rate=$('#dialog-fields [name="rate"]');if(rate)rate.value=String(state.rates[e.target.value]??0);
-});
-document.addEventListener('click',handleAction);
-render();
-if('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('Offline cache unavailable',err));
+async function init(){try{if(!/^https:\/\/[-\w]+\.supabase\.co\/?$/.test(cfg.url||'')||!(cfg.key?.startsWith('sb_publishable_')||cfg.key?.startsWith('eyJ'))){render();return;}
+ setSync('クラウドへ接続中');const mod=await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');client=mod.createClient(cfg.url,cfg.key,{auth:{autoRefreshToken:true,persistSession:true,detectSessionInUrl:false}});
+ const {data,error}=await client.auth.getSession();if(error)throw error;user=data.session?.user||null;
+ if(user)await refreshAll(true);else landingView();
+ // Realtimeが使えない場合も別端末の更新を取得する。
+ setInterval(()=>{if(!busy&&!$('#edit-dialog').open&&user&&eventId&&Date.now()-lastLoadedAt>22000)refreshData().catch(e=>setSync(errMsg(e),true));},25000);
+ }catch(err){console.error(err);setSync('接続エラー',true);$('#view').innerHTML=`<div class="auth-wrap">${panel('クラウドに接続できませんでした',`<p>${esc(errMsg(err))}</p><p>config.js・SQL初期化・Supabaseプロジェクトの状態・通信状況を確認してください。</p>${button('再読み込み','reload','light')}`)}</div>`;}}
+document.addEventListener('click',e=>{handleClick(e).catch(showError);});
+document.addEventListener('submit',e=>{if(e.target.id==='auth-form')authSubmit(e);});
+$('#edit-form').addEventListener('submit',formSubmit);
+document.addEventListener('change',e=>{if(e.target.id==='event-choice'){eventId=e.target.value;localStorage.setItem(localKey,eventId);tab='dashboard';refreshAll(true).catch(showError);}});
+window.addEventListener('online',()=>{if(user&&eventId)refreshAll(true).catch(()=>{});});
+render();init();
+if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./sw.js').catch(console.warn);

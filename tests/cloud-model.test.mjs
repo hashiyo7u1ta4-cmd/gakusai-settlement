@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { normalizeCloud } from '../cloud-model.mjs';
+import { calculate } from '../engine.mjs';
+const evt={event_name:'文化祭',sales:20000,reserve:1000,rates:{prep:2,shopping:3,car:4,operation:2,other:1}};
+const members=[{user_id:'a',display_name:'佐藤',role:'admin'},{user_id:'b',display_name:'田中',role:'member'}];
+const act=(person,status,rate=2)=>({person_id:person,type:'prep',quantity:1,rate,record_date:'2026-10-20',status});
+const exp=(person,status,amount)=>({paid_by:person,amount,title:'材料',record_date:'2026-10-20',status});
+const dep=(person,status,amount)=>({person_id:person,amount,record_date:'2026-10-20',status});
+test('pending and rejected records do not contribute to point or settlement balances',()=>{
+  const {state,records}=normalizeCloud(evt,members,[act('a','approved'),act('b','pending'),act('a','rejected')],[exp('b','pending',5000),exp('a','approved',2000)],[dep('b','pending',3000)]);
+  assert.equal(records.activities.length,3);
+  assert.equal(state.activities.length,1);
+  assert.equal(state.expenses.length,1);
+  assert.equal(state.deposits.length,0);
+  const result=calculate(state);
+  assert.equal(result.totalPoints,2);
+  assert.equal(result.net,17000);
+  assert.equal(result.byPerson.find(p=>p.id==='a').share,17000);
+  assert.equal(result.byPerson.find(p=>p.id==='b').balance,0);
+});
+test('approval counts a reimbursement once, while transfers are already confirmed records',()=>{
+  const {state}=normalizeCloud(evt,members,[act('a','approved'),act('b','approved')],[exp('b','approved',3000)],[dep('a','approved',4000)],[{from_user:null,to_user:'b',amount:2500,record_date:'2026-10-20'}]);
+  const c=calculate(state);
+  assert.equal(c.net,16000);
+  assert.equal(c.byPerson.find(p=>p.id==='b').share,8000);
+  assert.equal(c.byPerson.find(p=>p.id==='b').paidExpenses,3000);
+  assert.equal(c.byPerson.find(p=>p.id==='b').balance,8500);
+  assert.equal(c.byPerson.find(p=>p.id==='a').contributed,4000);
+});
