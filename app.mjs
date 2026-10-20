@@ -190,7 +190,7 @@ async function init(){try{if(!/^https:\/\/[-\w]+\.supabase\.co\/?$/.test(cfg.url
  setInterval(()=>{if(!busy&&!$('#edit-dialog').open&&user&&eventId&&Date.now()-lastLoadedAt>22000)refreshData().catch(e=>setSync(errMsg(e),true));},25000);
  }catch(err){console.error(err);setSync('接続エラー',true);$('#view').innerHTML=`<div class="auth-wrap">${panel('クラウドに接続できませんでした',`<p>${esc(errMsg(err))}</p><p>config.js・SQL初期化・Supabaseプロジェクトの状態・通信状況を確認してください。</p>${button('再読み込み','reload','light')}`)}</div>`;}}
 document.addEventListener('click',e=>{handleClick(e).catch(showError);});
-document.addEventListener('submit',e=>{if(e.target.id==='auth-form')authSubmit(e);});
+document.addEventListener('submit',e=>{if(e.target.id==='auth-form')authSubmit(e).catch(showError);});
 $('#edit-form').addEventListener('submit',formSubmit);
 document.addEventListener('change',e=>{if(e.target.id==='event-choice'){eventId=e.target.value;localStorage.setItem(localKey,eventId);tab='dashboard';refreshAll(true).catch(showError);}});
 window.addEventListener('online',()=>{if(user&&eventId)refreshAll(true).catch(()=>{});});
