@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="./styles.css">
 <link rel="stylesheet" href="./cloud.css">
 <link rel="stylesheet" href="./v4.css">
+<link rel="stylesheet" href="./v4.1.css">
 </head>
 <body>
 <div class="app-shell">
@@ -30,7 +31,12 @@
     <main id="view" class="view" aria-live="polite"><div class="center-loading">準備中…</div></main>
   </div>
 </div>
-<nav class="mobile-nav" id="mobile-nav" aria-label="モバイルメニュー"></nav>
+<nav class="mobile-nav" id="mobile-nav" aria-label="主要メニュー"></nav>
+<div id="nav-overlay" class="nav-overlay" hidden data-action="close-mobile-drawer"></div>
+<aside id="mobile-drawer" class="mobile-drawer" role="dialog" aria-modal="true" aria-label="全メニュー" aria-hidden="true" inert>
+  <div class="mobile-drawer-head"><strong>すべてのメニュー</strong><button type="button" class="close-x" data-action="close-mobile-drawer" aria-label="閉じる">×</button></div>
+  <nav id="drawer-nav" class="drawer-nav" aria-label="全機能"></nav>
+</aside>
 <dialog id="edit-dialog" class="dialog">
   <form id="edit-form" autocomplete="off">
     <div class="dialog-head"><h2 id="dialog-title"></h2><button class="close-x" type="button" data-action="close-dialog" aria-label="閉じる">×</button></div>

@@ -47,6 +47,7 @@ const me=()=>people.find(p=>p.userId===user?.id);
 const myId=()=>me()?.id||null;
 const myAuthKind=()=>accountKind(user);
 const googleConnected=()=>myAuthKind()==='google';
+const googleEmail=()=>googleConnected()?user?.identities?.find(i=>i.provider==='google')?.identity_data?.email||user?.email||'Googleアカウント':'';
 const shortId=id=>String(id||'').slice(0,8);
 const submittedBy=id=>people.find(x=>x.userId===id)?.name||'（元の登録端末）';
 const unitLabel=unit=>activityUnitLabel(unit||'count');
@@ -63,7 +64,12 @@ function download(name,data,type){const url=URL.createObjectURL(new Blob([data],
 const promptCode=key=>{try{return localStorage.getItem(`gakusai-v2-${key}-${eventId}`)||'';}catch{return '';}};
 function cacheCode(key,value){try{localStorage.setItem(`gakusai-v2-${key}-${eventId}`,value);}catch{notice('この端末でコードを記憶できません。安全な場所に控えてください。');}}
 const setSync=(txt,err=false)=>{const e=$('#sync-label');e.textContent=txt;e.classList.toggle('sync-error',err);};
-function navRender(){const markup=NAV.filter(n=>n.id!=='reviews'||isAdmin()).map(n=>`<button class="nav-item ${tab===n.id?'active':''}" type="button" data-tab="${n.id}"><span class="nav-icon">${n.icon}</span><span>${n.label}${n.id==='reviews'&&reviewCount()?`（${reviewCount()}）`:''}</span></button>`).join('');$('#desktop-nav').innerHTML=eventId?markup:'';$('#mobile-nav').innerHTML=eventId?markup:'';}
+const MOBILE_PRIMARY=[{id:'dashboard',label:'ホーム',icon:'⌂'},{id:'pos',label:'レジ',icon:'▣'},{id:'cash',label:'現金点検',icon:'▤'},{id:'inventory',label:'在庫',icon:'▥'}];
+let mobileDrawerOpen=false;
+function navButton(n,compact=false){return `<button class="nav-item ${tab===n.id?'active':''}" type="button" data-tab="${n.id}" ${tab===n.id?'aria-current="page"':''}><span class="nav-icon" aria-hidden="true">${n.icon}</span><span>${n.label}${!compact&&n.id==='reviews'&&reviewCount()?`（${reviewCount()}）`:''}</span></button>`;}
+function closeMobileDrawer(returnFocus=false){mobileDrawerOpen=false;$('#mobile-menu-toggle')?.setAttribute('aria-expanded','false');const panel=$('#mobile-drawer'),overlay=$('#nav-overlay');panel.classList.remove('open');panel.setAttribute('aria-hidden','true');panel.inert=true;overlay.hidden=true;document.body.classList.remove('drawer-open');if(returnFocus)$('#mobile-menu-toggle')?.focus();}
+function openMobileDrawer(){if(!eventId)return;mobileDrawerOpen=true;$('#mobile-menu-toggle')?.setAttribute('aria-expanded','true');const panel=$('#mobile-drawer'),overlay=$('#nav-overlay');panel.inert=false;panel.setAttribute('aria-hidden','false');overlay.hidden=false;document.body.classList.add('drawer-open');panel.classList.add('open');panel.querySelector('[data-action="close-mobile-drawer"]')?.focus();}
+function navRender(){const options=NAV.filter(n=>n.id!=='reviews'||isAdmin());$('#desktop-nav').innerHTML=eventId?options.map(n=>navButton(n)).join(''):'';$('#drawer-nav').innerHTML=eventId?options.map(n=>navButton(n)).join(''):'';const isMore=!MOBILE_PRIMARY.some(n=>n.id===tab);const primary=MOBILE_PRIMARY.map(n=>navButton(n,true)).join('');$('#mobile-nav').innerHTML=eventId?primary+`<button type="button" class="nav-item ${isMore?'active':''}" id="mobile-menu-toggle" data-action="open-mobile-drawer" aria-label="すべてのメニューを開く" aria-expanded="${mobileDrawerOpen}"><span class="nav-icon" aria-hidden="true">☰</span><span>メニュー</span></button>`:'';if(!eventId)closeMobileDrawer();}
 function render(){navRender();$('#top-label').textContent=currentEvent?.event_name||'学祭精算';if(!client){return setupView();}if(!eventId){return landingView();}
   const c=calculate(state);
   const f=v4.summary();if(!f.finalized&&(f.saleCount>0||f.closedSessions>0||f.openSessions>0)){c.blocked='POS運用中です。最終レジ締め・売上照合・管理者による利益分配確定まで送金案は表示しません。';c.suggestions=[];}
@@ -79,7 +85,7 @@ function landingView(){setSync(user?(googleConnected()?'Googleログイン済み
 }
 async function ensureUser(){if(!user)throw Error('まずGoogleでログインしてください。');return user;}
 async function googleAuth(){if(!client||busy)return;const redirectTo=oauthReturnUrl(window.location);const operation=myAuthKind()==='anonymous'?'link':'login';try{busy=true;const r=operation==='link'?await client.auth.linkIdentity({provider:'google',options:{redirectTo}}):await client.auth.signInWithOAuth({provider:'google',options:{redirectTo}});check(r);notice(operation==='link'?'Google連携画面に移動します':'Googleログイン画面に移動します');}catch(err){showError(err);}finally{busy=false;}}
-async function recheckGoogleLink(){if(!client||!user)return;const result=await client.auth.getUser();check(result);user=result.data.user;render();if(googleConnected())notice('Google連携を確認できました');else alert('Google連携はまだ確認できません。Supabaseで「Allow manual linking」を有効化し、ログアウトせずにGoogle連携を再試行してください。');}
+async function recheckGoogleLink(){if(!client||!user)return;const result=await client.auth.getUser();check(result);user=result.data.user;render();if(googleConnected())notice('Google連携を確認しました：'+googleEmail());else notice('未連携です。SupabaseでAllow manual linkingをONにし、Googleに連携を押してください。');}
 async function signout(){if(!user)return;const text=googleConnected()?'ログアウトしますか？ 別端末では同じGoogleアカウントで再ログインできます。':'匿名アカウントをログアウトすると、本人IDに戻れない場合があります。Googleに連携してからログアウトすることを推奨します。続けますか？';if(!confirm(text))return;try{check(await client.auth.signOut({scope:'local'}));user=null;memberships=[];eventId=null;currentEvent=null;people=[];records={activities:[],expenses:[],deposits:[],transfers:[]};detachChannel();render();notice('ログアウトしました');}catch(err){showError(err);}}
 async function authSubmit(e){e.preventDefault();if(busy)return;const fd=new FormData(e.target);busy=true;render();try{
   const displayName=String(fd.get('displayName')||'').trim();if(authMode!=='claim'&&(!displayName||displayName.length>40))throw Error('表示名を入力してください。');
@@ -156,7 +162,7 @@ function settingsView(){let inv=promptCode('invite'),adm=promptCode('admin');ret
  ${panel('ポイント配点',`<div class="rate-list">${TYPES.map(t=>`<div><span>${t.label}</span><strong>${ACTIVITY_UNITS[t.id].map(u=>`${points(state.rates[activityRateKey(t.id,u)]??0)}pt/${unitLabel(u)}`).join(' ・ ')}</strong></div>`).join('')}</div>${isAdmin()?button('配点を変更','edit-rates','soft'):''}<p class="hint">配点変更後の申請にのみ適用され、過去分は変更されません。</p>`)}
  ${panel('招待と管理者復旧',`<p class="section-help">参加者には招待コードだけを渡してください。管理者復旧キーは絶対に参加者へ渡さないでください。</p>${isAdmin()?`<small>参加者用招待コード（現在の端末に保存されている場合だけ表示）</small>${inv?`<div class="inline-secrets"><code class="invite-code">${esc(inv)}</code>${button('コピー','copy-invite','light')}</div>`:'<p>この端末に元のコードはありません。再生成すると以前のコードは無効になります。</p>'}<div class="button-stack">${button('招待コードを再生成','rotate-invite','light')}</div><hr class="secret-divider"><small>管理者復旧キー（別端末で管理者に戻るために使用）</small>${adm?`<div class="inline-secrets"><code class="invite-code">${esc(adm)}</code>${button('コピー','copy-admin','light')}</div>`:'<p>復旧キーは端末に保存されていません。再生成できます。</p>'}<div class="button-stack">${button('管理者復旧キーを再生成','rotate-admin','light')}</div>`:'<p>管理者に招待コードを問い合わせてください。</p>'}`)}
  ${panel('データ出力・更新',`<div class="button-stack">${button('JSONバックアップ','export-json','light')}${button('CSV（精算）','export-csv','light')}${button('最新版を取得','reload','light')}</div><p class="hint">データはSupabaseに保存されます。JSONバックアップにはPOS・在庫・会計履歴も含まれます。閲覧・保管用で、v4では自動復元には未対応です。GitHubに個人データをアップロードしないでください。</p>`)}
- ${panel('参加している出店',`<div class="event-switch"><label class="field"><span>切替先</span><select id="event-choice">${memberships.map(m=>`<option value="${esc(m.event_id)}" ${m.event_id===eventId?'selected':''}>${esc(m.events?.event_name||'イベント')}（${m.role==='admin'?'管理者':'参加者'}）</option>`).join('')}</select></label></div>${button('別の出店に参加・作成','back-landing','light')}<p class="hint">同じGoogleアカウントであれば別端末でも同じ参加者IDです。端末を紛失した場合はGoogleのアカウント管理でログイン中の端末を確認してください。</p><div class="account-banner account-bottom"><span><strong>${googleConnected()?'Googleでログイン中':'旧匿名アカウント'}</strong><small>${esc(user?.email||'Googleへの連携を推奨します')}</small></span>${googleConnected()?button('ログアウト','signout','light'):button('Googleに連携','google-auth','primary')}</div>${!googleConnected()?`<p class="hint">Google連携にはSupabaseの「Allow manual linking」をONにする必要があります。連携が完了するまではログアウトしないでください。</p>${button('連携状態を再確認','google-auth-status','light')}`:''}`)}</div>`;}
+ ${panel('参加している出店',`<div class="event-switch"><label class="field"><span>切替先</span><select id="event-choice">${memberships.map(m=>`<option value="${esc(m.event_id)}" ${m.event_id===eventId?'selected':''}>${esc(m.events?.event_name||'イベント')}（${m.role==='admin'?'管理者':'参加者'}）</option>`).join('')}</select></label></div>${button('別の出店に参加・作成','back-landing','light')}<p class="hint">同じGoogleアカウントであれば別端末でも同じ参加者IDです。端末を紛失した場合はGoogleのアカウント管理でログイン中の端末を確認してください。</p><div class="account-banner account-bottom"><span><strong>${googleConnected()?'✓ Google連携済み（複数端末OK）':'⚠ Google未連携（この端末の匿名認証）'}</strong><small>${esc(googleConnected()?googleEmail():'Google連携にはSupabaseのAllow manual linking設定が必要です')}</small></span>${googleConnected()?button('ログアウト','signout','light'):button('Googleに連携','google-auth','primary')}</div>${!googleConnected()?`<p class="hint">【未連携】Supabase → Authentication → Sign In / Providers → User Signups → Allow manual linking をONにして保存してください。連携前はログアウト・ブラウザデータ削除をしないでください。</p>${button('連携状態を再確認','google-auth-status','light')}`:''}`)}</div>`;}
 function openForm(kind,pre={}){if(!eventId)return;
  if(kind.startsWith('v4-')){const f=v4.form(kind.slice(3),pre);$('#edit-dialog').dataset.kind=kind;$('#edit-dialog').dataset.v4Pre=JSON.stringify(pre);$('#dialog-title').textContent=f.title;$('#dialog-fields').innerHTML=f.fields;$('#edit-dialog').showModal();return;}
  if(v4.locked()&&kind!=='transfer'&&kind!=='rename'&&kind!=='member-rename')return notice('最終分配が確定済みです。会計データは変更できません。');
@@ -201,8 +207,10 @@ async function resetParticipant(id){if(!isAdmin())return;const person=people.fin
 async function rotateKey(kind){if(!isAdmin())return;const isAdminKey=kind==='admin';if(!confirm(`${isAdminKey?'管理者復旧キー':'参加者用招待コード'}を変更しますか？以前のコードは使えなくなります。`))return;try{const secret=code();const fn=isAdminKey?'rotate_admin_code':'rotate_invite_code',param=isAdminKey?'p_admin_code':'p_invite_code';check(await client.rpc(fn,{p_event_id:eventId,[param]:secret}));cacheCode(isAdminKey?'admin':'invite',secret);render();alert(`${isAdminKey?'管理者復旧キー':'招待コード'}：\n${secret}\n\n安全な場所に保存してください。`);}catch(err){showError(err);}}
 async function refreshClick(){try{if(user){await refreshAll(true);notice('最新のデータを取得しました');}else render();}catch(err){showError(err);}}
 async function handleClick(e){const auth=e.target.closest('[data-auth]');if(auth){authMode=auth.dataset.auth;render();return;}
- const nav=e.target.closest('[data-tab]');if(nav){tab=nav.dataset.tab;render();window.scrollTo(0,0);return;}
+ const nav=e.target.closest('[data-tab]');if(nav){tab=nav.dataset.tab;closeMobileDrawer();render();window.scrollTo(0,0);return;}
  const target=e.target.closest('[data-action]');if(!target)return;const action=target.dataset.action;
+ if(action==='open-mobile-drawer'){openMobileDrawer();return;}
+ if(action==='close-mobile-drawer'){closeMobileDrawer(true);return;}
  if(action==='close-dialog'){ $('#edit-dialog').close();return; }
  if(action==='google-auth'){await googleAuth();return;}
  if(action==='google-auth-status'){await recheckGoogleLink();return;}
@@ -231,7 +239,9 @@ async function handleClick(e){const auth=e.target.closest('[data-auth]');if(auth
 }
 async function init(){try{if(!/^https:\/\/[-\w]+\.supabase\.co\/?$/.test(cfg.url||'')||!(cfg.key?.startsWith('sb_publishable_')||cfg.key?.startsWith('eyJ'))){render();return;}
  setSync('クラウドへ接続中');const mod=await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');client=mod.createClient(cfg.url,cfg.key,{auth:{autoRefreshToken:true,persistSession:true,detectSessionInUrl:true,flowType:'pkce'}});
+ const oauthQuery=new URLSearchParams(window.location.search);const oauthError=oauthQuery.get('error_description')||oauthQuery.get('error');
  const {data,error}=await client.auth.getSession();if(error)throw error;user=data.session?.user||null;
+ if(oauthError){console.warn('OAuth callback error:',oauthError);queueMicrotask(()=>alert('Google認証から戻れませんでした：'+oauthError+'\nSupabaseのGoogle設定・Allow manual linking・Redirect URLsを確認してください。'));}
    // getSession can contain the pre-OAuth anonymous user; ask Auth for the latest identities.
    if(user){const fresh=await client.auth.getUser();if(!fresh.error&&fresh.data?.user)user=fresh.data.user;}
  if(user)await refreshAll(true);else landingView();
@@ -240,6 +250,7 @@ async function init(){try{if(!/^https:\/\/[-\w]+\.supabase\.co\/?$/.test(cfg.url
  setInterval(()=>{if(!busy&&!$('#edit-dialog').open&&user&&eventId&&Date.now()-lastLoadedAt>22000)refreshData().catch(e=>setSync(errMsg(e),true));},25000);
  }catch(err){console.error(err);setSync('接続エラー',true);$('#view').innerHTML=`<div class="auth-wrap">${panel('クラウドに接続できませんでした',`<p>${esc(errMsg(err))}</p><p>config.js・SQL初期化・Supabaseプロジェクトの状態・通信状況を確認してください。</p>${button('再読み込み','reload','light')}`)}</div>`;}}
 document.addEventListener('click',e=>{handleClick(e).catch(showError);});
+document.addEventListener('keydown',e=>{if(!mobileDrawerOpen)return;if(e.key==='Escape'){closeMobileDrawer(true);return;}if(e.key==='Tab'){const list=[...$('#mobile-drawer').querySelectorAll('button:not(:disabled)')];const first=list[0],last=list.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}});
 document.addEventListener('submit',e=>{if(e.target.id==='auth-form')authSubmit(e).catch(showError);});
 $('#edit-form').addEventListener('submit',formSubmit);
 document.addEventListener('input',e=>{if(e.target.id==='v4-tender')v4.change(e.target);});

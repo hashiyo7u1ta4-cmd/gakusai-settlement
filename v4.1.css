@@ -1,0 +1,20 @@
+/* v4.1: five-item mobile nav and accessible sliding menu */
+.nav-overlay[hidden]{display:none!important}
+.nav-overlay{position:fixed;inset:0;background:rgba(11,31,23,.42);z-index:55}
+.mobile-drawer{position:fixed;z-index:56;right:0;top:0;bottom:0;width:min(360px,88vw);height:100dvh;background:#fff;box-shadow:-12px 0 35px #122b2330;transform:translateX(105%);transition:transform .2s ease;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 14px env(safe-area-inset-bottom);overflow:hidden;visibility:hidden}
+.mobile-drawer.open{transform:translateX(0);visibility:visible}
+.mobile-drawer-head{padding:14px 10px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)}
+.drawer-nav{display:flex;flex-direction:column;gap:3px;overflow:auto;overscroll-behavior:contain;padding:12px 0 24px;min-height:0}
+.drawer-nav .nav-item{width:100%;min-height:48px;display:flex;flex-direction:row;justify-content:flex-start;text-align:left;font-size:14px;padding:9px 13px}
+.drawer-nav .nav-icon{min-width:26px;text-align:center}
+body.drawer-open{overflow:hidden}
+.v4-shortage{color:#a04d24!important;font-weight:750}
+@media(min-width:701px){.nav-overlay,.mobile-drawer{display:none!important}}
+@media(max-width:700px){
+ .mobile-nav{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;flex-wrap:nowrap!important;overflow:hidden!important;scroll-snap-type:none!important;padding:6px 4px calc(env(safe-area-inset-bottom) + 5px)!important;gap:2px!important}
+ .mobile-nav .nav-item{width:auto!important;min-width:0!important;flex:unset!important;scroll-snap-align:none!important;white-space:nowrap;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px;font-size:10px;padding:8px 0}
+ .mobile-nav .nav-icon{font-size:19px;line-height:1.15}
+ .view{padding-bottom:calc(env(safe-area-inset-bottom) + 115px)}
+ .toast{bottom:calc(env(safe-area-inset-bottom) + 89px)}
+}
+@media(prefers-reduced-motion:reduce){.mobile-drawer{transition:none}}
