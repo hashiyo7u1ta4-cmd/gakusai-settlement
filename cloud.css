@@ -13,3 +13,31 @@
 .account-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);border-radius:11px;background:var(--green-tint);padding:12px 14px;margin:0 0 16px;flex-wrap:wrap}
 .account-banner span{display:grid;gap:4px;min-width:0}.account-banner small{color:var(--sub);font-size:12px;overflow-wrap:anywhere}.account-banner .btn{flex-shrink:0}.account-bottom{margin:16px 0 0}
 @media(max-width:520px){.account-banner{align-items:stretch;flex-direction:column}.account-banner .btn{width:100%}.auth-panel .btn[data-action=google-auth]{min-height:46px}}
+
+
+/* v4.0.1: fixed sidebar frame and independently scrollable desktop navigation. */
+@media (min-width:701px) {
+  .sidebar {
+    height:100vh;
+    height:100dvh;
+    min-height:0;
+    overflow:hidden;
+    position:sticky;
+    top:0;
+  }
+  .sidebar .brand, .sidebar .nav-caption, .sidebar .side-note { flex-shrink:0; }
+  #desktop-nav {
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    overflow-x:hidden;
+    overscroll-behavior-y:contain;
+    scrollbar-width:thin;
+    scrollbar-color:#b1c6bb transparent;
+    align-content:start;
+    padding-right:4px;
+  }
+  .sidebar .side-note { margin-top:12px; }
+  #desktop-nav::-webkit-scrollbar { width:6px; }
+  #desktop-nav::-webkit-scrollbar-thumb { background:#b1c6bb; border-radius:10px; }
+}
