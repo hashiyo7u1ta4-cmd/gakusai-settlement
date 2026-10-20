@@ -4,3 +4,12 @@
 @media(max-width:430px){.storage-indicator{display:none}.button-stack .btn{flex:1 1 auto}.inline-secrets{display:flex;flex-direction:column;align-items:stretch}.invite-code{font-size:13px}}
 
 .secret-divider{border:0;border-top:1px solid var(--border);margin:18px 0}
+
+/* v3: participant roster and contribution unit breakdown */
+.member-roster{align-items:flex-start}.member-actions{display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap}.member-actions .btn{font-size:11px;min-height:30px;padding:6px 8px}.member-roster .person-ident small{display:block;font-size:11px}.member-toolbar{margin:10px 0}.member-roster .person-ident{min-width:125px}.auth-alt{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
+@media(max-width:650px){.member-roster{align-items:flex-start;flex-direction:column}.member-actions{width:100%;justify-content:flex-start}.member-roster .person-ident strong{white-space:normal}.rate-list>div{align-items:flex-start}.rate-list strong{max-width:65%;white-space:normal}}
+
+/* v3 OAuth / profile identity */
+.account-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);border-radius:11px;background:var(--green-tint);padding:12px 14px;margin:0 0 16px;flex-wrap:wrap}
+.account-banner span{display:grid;gap:4px;min-width:0}.account-banner small{color:var(--sub);font-size:12px;overflow-wrap:anywhere}.account-banner .btn{flex-shrink:0}.account-bottom{margin:16px 0 0}
+@media(max-width:520px){.account-banner{align-items:stretch;flex-direction:column}.account-banner .btn{width:100%}.auth-panel .btn[data-action=google-auth]{min-height:46px}}
